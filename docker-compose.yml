@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8166:8166"
+    volumes:
+      - supply_chain_db:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///./data/supply_chain.db
+      - SECRET_KEY=${SECRET_KEY:-change-this-in-production}
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  supply_chain_db:
