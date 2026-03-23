@@ -189,6 +189,7 @@ onMounted(() => {
 
           <p class="demo-hint">演示账号：system_admin / logistics_admin / warehouse_procurement / campus_supplier / counselor_teacher（密码均 123456）</p>
           <p class="demo-hint demo-hint-tip">多角色同时演示时，请为每个角色单独开「无痕/隐私窗口」登录，避免 token 互相覆盖</p>
+          <router-link to="/upload" class="upload-link">匿名举报 / 反馈材料上传</router-link>
         </div>
       </div>
     </div>
@@ -478,6 +479,7 @@ onMounted(() => {
   margin-top: 20px;
 }
 .demo-hint-tip { margin-top: 6px; color: var(--primary); font-size: 11px; }
+.upload-link { display: block; text-align: center; margin-top: 12px; font-size: 13px; color: var(--primary); }
 
 @media (max-width: 1024px) {
   .login-layout {

@@ -18,6 +18,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { public: true, title: '登录' },
   },
   {
+    path: '/upload',
+    name: 'PublicUpload',
+    component: () => import('@/views/upload/PublicUpload.vue'),
+    meta: { public: true, title: '匿名反馈材料上传' },
+  },
+  {
     path: '/',
     component: AppLayout,
     redirect: '/dashboard',

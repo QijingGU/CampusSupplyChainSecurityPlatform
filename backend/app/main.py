@@ -1,8 +1,10 @@
-from fastapi import FastAPI, APIRouter, APIRouter
+from pathlib import Path
+from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from .config import settings
 from .database import engine, Base
-from .api import auth, goods, ai, purchase, supplier, trace, warning, stock, delivery, dashboard, audit, ids
+from .api import auth, goods, ai, purchase, supplier, trace, warning, stock, delivery, dashboard, audit, ids, upload
 from .middleware.ids_middleware import IDSMiddleware
 from .schema_sync import ensure_schema
 
@@ -72,6 +74,12 @@ app.include_router(delivery.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 app.include_router(audit.router, prefix="/api")
 app.include_router(ids.router, prefix="/api")
+app.include_router(upload.router, prefix="/api")
+
+# 静态文件：上传文件访问
+_uploads_dir = Path(__file__).resolve().parent.parent / "uploads"
+_uploads_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(_uploads_dir)), name="uploads")
 
 
 @app.get("/")

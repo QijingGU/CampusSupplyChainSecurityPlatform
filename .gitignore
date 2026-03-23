@@ -34,6 +34,7 @@ build/
 *.db
 backend/supply_chain.db
 backend/data/
+backend/uploads/
 
 # ========== IDE ==========
 .idea/

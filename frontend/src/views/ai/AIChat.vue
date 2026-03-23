@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick } from 'vue'
-import { ChatDotRound, Promotion, User, Loading, CircleCheck, DocumentCopy, WarningFilled } from '@element-plus/icons-vue'
+import { ChatDotRound, Promotion, User, Loading, CircleCheck, DocumentCopy, WarningFilled, Cpu } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import { chat, executeAction } from '@/api/ai'
@@ -9,6 +9,14 @@ import type { RoleType } from '@/types/role'
 import type { ChatAction, ReactStep } from '@/api/ai'
 
 const THINK_DELAY_MS = 2200
+const REASONING_STEP_MS = 550
+const THINK_STATUS_TEXTS = ['理解需求…', '分析场景…', '查询物资…', '生成方案…']
+const DEFAULT_REASONING_STEPS: ReactStep[] = [
+  { step: 1, text: '理解场景：识别为活动保障需求' },
+  { step: 2, text: '调用工具：query_goods_catalog() 查询物资目录' },
+  { step: 3, text: '调用工具：check_inventory() 核对库存可用性' },
+  { step: 4, text: '生成采购清单，等待您确认' },
+]
 
 const userStore = useUserStore()
 const userRole = computed(() => userStore.userInfo?.role as RoleType)
@@ -36,15 +44,54 @@ interface MsgBubble {
 const messages = ref<MsgBubble[]>([])
 const input = ref('')
 const loading = ref(false)
+const thinkStatusIndex = ref(0)
+let thinkStatusTimer: ReturnType<typeof setInterval> | null = null
 const scrollRef = ref<HTMLElement>()
 const executing = ref(false)
 const sessionId = ref<string | null>(null)
+
+// 推理阶段：步骤动画完成后才显示最终结果
+const reasoningPhase = ref<{
+  steps: ReactStep[]
+  stepIndex: number
+  content: string
+  actions: ChatAction[]
+  react?: ReactStep[]
+} | null>(null)
 
 if (messages.value.length === 0) {
   messages.value = [{ role: 'assistant', content: initialMessage.value }]
 }
 
 const demoHint = '周三有比赛，帮我做保障计划 / 40人班会要茶歇 / 现在什么短缺？'
+
+function startThinkStatusCycle() {
+  thinkStatusIndex.value = 0
+  thinkStatusTimer = setInterval(() => {
+    thinkStatusIndex.value = (thinkStatusIndex.value + 1) % THINK_STATUS_TEXTS.length
+  }, 480)
+}
+
+function stopThinkStatusCycle() {
+  if (thinkStatusTimer) {
+    clearInterval(thinkStatusTimer)
+    thinkStatusTimer = null
+  }
+}
+
+async function runReasoningPhase(steps: ReactStep[], content: string, actions: ChatAction[], react?: ReactStep[]) {
+  reasoningPhase.value = { steps, stepIndex: 0, content, actions, react }
+  await nextTick()
+  scrollRef.value?.scrollTo?.({ top: 9999 })
+  for (let i = 0; i < steps.length; i++) {
+    await new Promise((r) => setTimeout(r, REASONING_STEP_MS))
+    if (reasoningPhase.value) reasoningPhase.value.stepIndex = i + 1
+    await nextTick()
+    scrollRef.value?.scrollTo?.({ top: 9999 })
+  }
+  await new Promise((r) => setTimeout(r, 400))
+  reasoningPhase.value = null
+}
 
 // 演示：AI 拦截不合理需求（100台笔记本、班级观影等）
 function isAbnormalRequest(q: string): boolean {
@@ -57,12 +104,23 @@ async function sendText(rawText: string) {
   if (!q) return
   messages.value.push({ role: 'user', content: q })
   loading.value = true
+  startThinkStatusCycle()
   await nextTick()
   scrollRef.value?.scrollTo?.({ top: 9999 })
 
   if (userRole.value === 'counselor_teacher' && isAbnormalRequest(q)) {
     await new Promise((r) => setTimeout(r, THINK_DELAY_MS))
     loading.value = false
+    stopThinkStatusCycle()
+    const steps = [
+      { step: 1, text: '理解需求：检测到大规模设备申请' },
+      { step: 2, text: '调用工具：check_policy() 校验采购规范' },
+      { step: 3, text: '检测到异常：数量/用途不符合教学核心' },
+      { step: 4, text: '生成留痕备注，需人工确认' },
+    ]
+    await runReasoningPhase(steps, '', [
+      { type: 'force_submit', label: '强制提交', payload: { items: [{ name: '笔记本电脑', quantity: 100, unit: '台' }] } },
+    ])
     messages.value.push({
       role: 'assistant',
       content: '该需求不符合教学设备申请规范，观影非教学核心用途，暂不支持提交。',
@@ -74,10 +132,21 @@ async function sendText(rawText: string) {
   }
 
   try {
-    const res: any = await chat(q, sessionId.value)
+    const apiPromise = chat(q, sessionId.value)
+    const minThinkPromise = new Promise((r) => setTimeout(r, THINK_DELAY_MS))
+    const res: any = await Promise.all([apiPromise, minThinkPromise]).then(([r]) => r)
+    stopThinkStatusCycle()
     const data = res?.data || res
     if (!data) throw new Error('无效响应')
     if (data.session_id) sessionId.value = data.session_id
+    const hasActions = data.actions?.length > 0
+    const steps = data.react?.length ? data.react : (hasActions ? DEFAULT_REASONING_STEPS : [])
+
+    if (hasActions && steps.length > 0) {
+      loading.value = false
+      await runReasoningPhase(steps, data.reply, data.actions || [], data.react)
+    }
+    loading.value = false
     messages.value.push({
       role: 'assistant',
       content: data.reply,
@@ -85,14 +154,14 @@ async function sendText(rawText: string) {
       actions: data.actions || [],
     })
   } catch (e: any) {
+    stopThinkStatusCycle()
+    loading.value = false
     messages.value.push({
       role: 'assistant',
       content: `请求失败：${e?.message || '请检查网络或后端服务'}\n\n演示话术：${demoHint}`,
     })
-  } finally {
-    loading.value = false
-    nextTick().then(() => scrollRef.value?.scrollTo?.({ top: 9999 }))
   }
+  nextTick().then(() => scrollRef.value?.scrollTo?.({ top: 9999 }))
 }
 
 async function send() {
@@ -175,6 +244,11 @@ async function handleAction(action: ChatAction) {
     return
   }
   if (action.type === 'force_submit') {
+    loading.value = true
+    startThinkStatusCycle()
+    await new Promise((r) => setTimeout(r, THINK_DELAY_MS))
+    stopThinkStatusCycle()
+    loading.value = false
     openForceSubmitDialog(action)
     return
   }
@@ -257,10 +331,39 @@ async function handleAction(action: ChatAction) {
             </div>
           </div>
         </template>
+        <!-- 推理阶段：决策链动画 -->
+        <div v-if="reasoningPhase" class="message assistant reasoning">
+          <div class="avatar reasoning-avatar">
+            <el-icon><Cpu /></el-icon>
+          </div>
+          <div class="bubble reasoning-bubble">
+            <div class="reasoning-header">
+              <el-icon><DocumentCopy /></el-icon>
+              <span>ReAct 决策链</span>
+            </div>
+            <ul class="reasoning-steps">
+              <li
+                v-for="(s, i) in reasoningPhase.steps.slice(0, reasoningPhase.stepIndex)"
+                :key="i"
+                class="reasoning-step"
+              >
+                <span class="step-num"><el-icon><CircleCheck /></el-icon></span>
+                {{ s.text }}
+              </li>
+            </ul>
+          </div>
+        </div>
         <div v-if="loading" class="message assistant">
-          <div class="avatar"><el-icon><ChatDotRound /></el-icon></div>
+          <div class="avatar loading-avatar">
+            <el-icon class="spin"><Cpu /></el-icon>
+          </div>
           <div class="bubble loading">
-            <el-icon class="is-loading"><Loading /></el-icon> 思考中...
+            <span class="think-dots">
+              <span class="dot" />
+              <span class="dot" />
+              <span class="dot" />
+            </span>
+            <span class="think-text">{{ THINK_STATUS_TEXTS[thinkStatusIndex] }}</span>
           </div>
         </div>
       </div>
@@ -474,16 +577,121 @@ async function handleAction(action: ChatAction) {
     .trace-text { color: var(--text-muted); }
 
     &.loading {
+      display: flex;
+      align-items: center;
+      gap: 12px;
       color: var(--text-muted);
+      min-width: 200px;
     }
   }
+}
 
-  &.user .bubble .react-box,
-  &.user .bubble .apply-preview,
-  &.user .bubble .actions,
-  &.user .bubble .trace-box {
-    display: none;
+.loading-avatar {
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.2) 0%, rgba(99, 102, 241, 0.15) 100%) !important;
+  .el-icon.spin {
+    animation: spin 1.2s linear infinite;
   }
+}
+
+.think-dots {
+  display: inline-flex;
+  gap: 4px;
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--primary);
+    opacity: 0.6;
+    animation: think-bounce 0.6s ease-in-out infinite;
+    &:nth-child(1) { animation-delay: 0s; }
+    &:nth-child(2) { animation-delay: 0.15s; }
+    &:nth-child(3) { animation-delay: 0.3s; }
+  }
+}
+
+.think-text {
+  margin-left: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes think-bounce {
+  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  50% { transform: translateY(-4px); opacity: 1; }
+}
+
+.reasoning-bubble {
+  border: 1px solid rgba(79, 70, 229, 0.2) !important;
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.04) 0%, rgba(99, 102, 241, 0.02) 100%) !important;
+}
+
+.reasoning-avatar {
+  background: linear-gradient(135deg, var(--primary) 0%, #6366f1 100%) !important;
+  .el-icon { color: #fff !important; }
+}
+
+.reasoning-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--primary);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(79, 70, 229, 0.15);
+}
+
+.reasoning-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reasoning-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  animation: reasoning-fade 0.4s ease-out;
+}
+
+.reasoning-step .step-num {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(34, 197, 94, 0.2);
+  color: var(--success);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+@keyframes reasoning-fade {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.message.user .bubble .react-box,
+.message.user .bubble .apply-preview,
+.message.user .bubble .actions,
+.message.user .bubble .trace-box {
+  display: none;
 }
 
 .input-area {

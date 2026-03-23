@@ -507,7 +507,7 @@ def get_logistics_screen(
     dispatch_pending = db.query(Purchase).filter(Purchase.status.in_(("stocked_in", "stocked_out"))).count()
     receive_pending = db.query(Delivery).filter(Delivery.status == "on_way").count()
     purchase_completed = db.query(Purchase).filter(Purchase.status == "completed").count()
-    supplier_count = db.query(Supplier).filter(Supplier.is_active == True).count()
+    supplier_count = db.query(Supplier).count()
     warning_pending = db.query(Warning).filter(Warning.status == "pending").count()
     delivery_ongoing = db.query(Delivery).filter(Delivery.status.in_(("pending", "loading", "on_way"))).count()
 
