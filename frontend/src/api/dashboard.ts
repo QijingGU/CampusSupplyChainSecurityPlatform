@@ -135,3 +135,51 @@ export interface LogisticsScreenData {
 export function getLogisticsScreen() {
   return request.get<LogisticsScreenData>('/dashboard/screen/logistics')
 }
+
+export interface SupplyChainOverviewScreenData {
+  stats: { title: string; value: number; path: string; accent: string }[]
+  pipeline: {
+    key: string
+    title: string
+    subtitle: string
+    count: number
+    done: boolean
+    targetPath: string
+  }[]
+  risk: {
+    warningPending: number
+    idsToday: number
+    idsBlocked: number
+    recentWarnings: {
+      id: number
+      material: string
+      level: string
+      status: string
+      desc: string
+      created_at: string
+    }[]
+    recentEvents: {
+      id: number
+      client_ip: string
+      attack_type: string
+      blocked: number
+      path: string
+      created_at: string
+    }[]
+  }
+  recentOrders: {
+    id: number
+    order_no: string
+    status: string
+    status_label: string
+    receiver_name: string
+    destination: string
+    created_at: string
+  }[]
+  updatedAt: string
+}
+
+export function getSupplyChainOverviewScreen() {
+  return request.get<SupplyChainOverviewScreenData>('/overview/screen')
+}
+

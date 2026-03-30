@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick } from 'vue'
-import { ChatDotRound, Promotion, User, Loading, CircleCheck, DocumentCopy, WarningFilled, Cpu } from '@element-plus/icons-vue'
+import { ChatDotRound, Promotion, User, CircleCheck, DocumentCopy, WarningFilled, Cpu } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import { chat, executeAction } from '@/api/ai'

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Lock, Monitor, ArrowLeft } from '@element-plus/icons-vue'
+import { Lock, Monitor, ArrowLeft, FolderOpened } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -10,6 +10,7 @@ const loading = ref(true)
 const navItems = [
   { path: '/security/ids', label: 'IDS 入侵检测', icon: Lock },
   { path: '/security/situation', label: '安全态势感知', icon: Monitor },
+  { path: '/security/sandbox', label: '安全沙箱', icon: FolderOpened },
 ]
 
 // 安全中心仅管理员可访问，返回时跳转到管理员默认入口（用户管理）
@@ -44,12 +45,12 @@ onBeforeUnmount(() => {
     </div>
     <aside class="security-nav">
       <div class="nav-back" @click="goBack">
-        <el-icon><ArrowLeft /></el-icon>
+        <el-icon :size="18"><ArrowLeft /></el-icon>
         <span>返回平台</span>
       </div>
       <div class="nav-header">
         <div class="nav-logo">
-          <el-icon :size="24"><Lock /></el-icon>
+          <el-icon :size="26"><Lock /></el-icon>
         </div>
         <span class="nav-title">安全中心</span>
       </div>
@@ -61,7 +62,7 @@ onBeforeUnmount(() => {
           :class="{ active: isActive(item.path) }"
           @click="goTo(item.path)"
         >
-          <el-icon><component :is="item.icon" /></el-icon>
+          <el-icon :size="20"><component :is="item.icon" /></el-icon>
           <span>{{ item.label }}</span>
         </div>
       </nav>
@@ -116,7 +117,7 @@ onBeforeUnmount(() => {
 }
 
 .security-nav {
-  width: 200px;
+  width: 228px;
   background: #0a0a0a;
   border-right: 1px solid rgba(255, 255, 255, 0.06);
   display: flex;
@@ -124,12 +125,12 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 .nav-back {
-  padding: 16px 20px;
+  padding: 18px 20px;
   display: flex;
   align-items: center;
   gap: 10px;
   color: rgba(255, 255, 255, 0.5);
-  font-size: 13px;
+  font-size: 15px;
   cursor: pointer;
   transition: color 0.2s;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -138,14 +139,14 @@ onBeforeUnmount(() => {
   color: #3b82f6;
 }
 .nav-header {
-  padding: 24px 20px;
+  padding: 22px 20px 26px;
   display: flex;
   align-items: center;
   gap: 12px;
 }
 .nav-logo {
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
   border-radius: 12px;
   background: rgba(59, 130, 246, 0.15);
   border: 1px solid rgba(59, 130, 246, 0.25);
@@ -155,25 +156,28 @@ onBeforeUnmount(() => {
   color: #3b82f6;
 }
 .nav-title {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
   color: #fff;
+  letter-spacing: 0.02em;
 }
 .nav-list {
   flex: 1;
-  padding: 16px 12px;
+  padding: 12px 12px 20px;
 }
 .nav-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 16px;
-  border-radius: 10px;
+  padding: 16px 18px;
+  min-height: 52px;
+  border-radius: 12px;
   cursor: pointer;
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 14px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 15px;
+  line-height: 1.35;
   transition: all 0.2s;
-  margin-bottom: 4px;
+  margin-bottom: 8px;
 }
 .nav-item:hover {
   background: rgba(255, 255, 255, 0.05);

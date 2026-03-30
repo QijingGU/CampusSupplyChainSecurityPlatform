@@ -44,4 +44,21 @@
   --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.08);
   --shadow-glow: 0 4px 24px rgba(79, 70, 229, 0.08);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04);
+
+  /* 数据大屏：与主色同系（靛蓝），避免青霓虹与侧栏暖白硬切 */
+  --screen-bg-top: #0c1020;
+  --screen-bg-mid: #0f1628;
+  --screen-bg-bottom: #0a0e18;
+  --screen-panel: rgba(15, 23, 42, 0.78);
+  --screen-panel-solid: #131c2f;
+  --screen-border: rgba(99, 102, 241, 0.2);
+  --screen-border-soft: rgba(99, 102, 241, 0.12);
+  --screen-grid: rgba(99, 102, 241, 0.055);
+  --screen-accent: #818cf8;
+  --screen-accent-strong: #a5b4fc;
+  --screen-glow: rgba(129, 140, 248, 0.14);
+  --screen-text: #e2e8f0;
+  --screen-muted: #94a3b8;
+  --screen-chrome-bg: linear-gradient(180deg, #0e111a 0%, #141a2e 100%);
+  --screen-chrome-border: rgba(99, 102, 241, 0.14);
 }

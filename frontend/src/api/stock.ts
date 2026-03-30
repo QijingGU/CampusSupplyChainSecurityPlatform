@@ -8,8 +8,21 @@ export function listStockOut() {
   return request.get('/stock/out')
 }
 
+export interface InventoryItem {
+  id: number
+  goods_name: string
+  category: string
+  quantity: number
+  unit: string
+  batch_no: string
+  safe_qty: number
+  is_low_stock: boolean
+  days_to_expire: number | null
+  updated_at: string | null
+}
+
 export function listInventory(params?: { keyword?: string }) {
-  return request.get('/stock/inventory', { params })
+  return request.get<InventoryItem[]>('/stock/inventory', { params })
 }
 
 export interface StockInItem {

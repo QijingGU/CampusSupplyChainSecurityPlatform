@@ -1,7 +1,17 @@
 from pathlib import Path
 import os
+import sys
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
+
+# 匹配常见内网 HTTP 来源（192.168/10/172.16-31），便于局域网手机/其他电脑访问前端 dev server
+PRIVATE_LAN_CORS_REGEX = (
+    r"^http://("
+    r"192\.168\.\d{1,3}\.\d{1,3}"
+    r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}"
+    r")(:\d+)?$"
+)
 
 # 确保从 backend 目录加载 .env（无论启动路径）
 _env_file = Path(__file__).resolve().parent.parent / ".env"
@@ -22,6 +32,17 @@ class Settings(BaseSettings):
     # 数据库
     DATABASE_URL: str = "sqlite:///./supply_chain.db"
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_sqlite_url_for_local_windows(cls, v):
+        """Docker 使用 sqlite:////data/supply_chain.db；若在 Windows 本机 .env 误抄该值会无法打开库。"""
+        if v is None:
+            return v
+        s = str(v).strip()
+        if sys.platform == "win32" and s == "sqlite:////data/supply_chain.db":
+            return "sqlite:///./supply_chain.db"
+        return v
+
     # JWT
     SECRET_KEY: str = "your-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
@@ -32,9 +53,22 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173", "http://127.0.0.1:5173",
         "http://localhost:4173", "http://127.0.0.1:4173",  # vite preview
+        "http://localhost:8080", "http://127.0.0.1:8080",  # Docker Nginx
         "http://localhost:8166", "http://127.0.0.1:8166",  # 同源直连
         "http://localhost", "http://127.0.0.1",  # 小皮 80 端口
     ]
+
+    # 为 true 时额外允许 PRIVATE_LAN_CORS_REGEX 匹配的来源（生产环境可设为 false）
+    CORS_ALLOW_PRIVATE_NETWORKS: bool = True
+
+    # IDS：请求体参与检测时的最大字节（过大不读满，避免内存压力）
+    IDS_MAX_BODY_BYTES: int = 8192
+    # IDS：命中后是否尝试 Windows 防火墙封禁（非 Windows 自动跳过）
+    IDS_FIREWALL_BLOCK: bool = True
+    # IDS：命中后是否异步调用 LLM 生成研判（需配置 LLM；失败则仅规则结果）
+    IDS_AI_ANALYSIS: bool = True
+    # IDS：达到此分值即阻断（其余仅记录）
+    IDS_BLOCK_THRESHOLD: int = 70
 
     # LLM 智能体（可选，不配置则用规则引擎）
     LLM_PROVIDER: str = "ollama"  # ollama | openai | deepseek

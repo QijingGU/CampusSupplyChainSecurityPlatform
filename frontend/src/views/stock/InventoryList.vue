@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { listInventory } from '@/api/stock'
+import type { InventoryItem } from '@/api/stock'
 
 const keyword = ref('')
 const loading = ref(false)
-const tableData = ref<any[]>([])
+const tableData = ref<InventoryItem[]>([])
 
 async function fetchData() {
   loading.value = true
@@ -35,6 +36,26 @@ onMounted(fetchData)
         <el-table-column prop="batch_no" label="批次号" width="140" />
         <el-table-column prop="quantity" label="数量" width="100" />
         <el-table-column prop="unit" label="单位" width="80" />
+        <el-table-column label="库存状态" width="140">
+          <template #default="{ row }">
+            <el-tag :type="row.is_low_stock ? 'danger' : 'success'" size="small">
+              {{ row.is_low_stock ? '低库存' : '正常' }}
+            </el-tag>
+            <div class="safe-line">安全线: {{ row.safe_qty }}{{ row.unit || '件' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="临期(天)" width="120">
+          <template #default="{ row }">
+            <el-tag
+              v-if="row.days_to_expire !== null"
+              :type="row.days_to_expire <= 7 ? 'danger' : row.days_to_expire <= 30 ? 'warning' : 'info'"
+              size="small"
+            >
+              {{ row.days_to_expire }}
+            </el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
       </el-table>
     </div>
   </div>
@@ -44,4 +65,5 @@ onMounted(fetchData)
 .page { padding: 0; }
 .page-header { display: flex; justify-content: space-between; margin-bottom: 20px; }
 .table-card { padding: 20px; background: var(--bg-card); border-radius: 12px; }
+.safe-line { margin-top: 4px; font-size: 12px; color: var(--text-muted); }
 </style>

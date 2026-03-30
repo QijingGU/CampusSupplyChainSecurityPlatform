@@ -21,3 +21,14 @@ class IDSEvent(Base):
     firewall_rule = Column(String(256), default="")  # 防火墙规则名
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     archived = Column(Integer, default=0)  # 0=未归档 1=已归档
+    status = Column(String(32), default="new", index=True)  # new / investigating / mitigated / false_positive / closed
+    review_note = Column(Text, default="")
+    action_taken = Column(String(128), default="")
+    risk_score = Column(Integer, default=0)  # 0-100
+    confidence = Column(Integer, default=0)  # 0-100
+    hit_count = Column(Integer, default=0)
+    detect_detail = Column(Text, default="")  # json string of matched signatures
+    ai_analysis = Column(Text, default="")  # LLM 研判全文
+    ai_risk_level = Column(String(32), default="")  # high / medium / low / unknown
+    ai_confidence = Column(Integer, default=0)  # 0-100
+    ai_analyzed_at = Column(DateTime(timezone=True), nullable=True)

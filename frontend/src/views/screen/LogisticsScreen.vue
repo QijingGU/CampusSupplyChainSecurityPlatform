@@ -42,31 +42,38 @@ async function load() {
   }
 }
 
+function cssVar(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return v || fallback
+}
+
 function renderChart() {
   const el = document.getElementById('lg-chart')
   if (!el || !data.value?.chart) return
   if (!chartInstance) chartInstance = echarts.init(el)
   const { labels, purchase } = data.value.chart
+  const accent = cssVar('--screen-accent', '#818cf8')
   chartInstance.setOption({
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis',
-      backgroundColor: 'rgba(10, 25, 41, 0.95)',
-      borderColor: 'rgba(0, 212, 255, 0.4)',
+      backgroundColor: 'rgba(15, 23, 42, 0.95)',
+      borderColor: 'rgba(129, 140, 248, 0.45)',
       textStyle: { color: '#94a3b8', fontSize: 12 },
     },
     grid: { left: 52, right: 24, top: 40, bottom: 32 },
     xAxis: {
       type: 'category',
       data: labels,
-      axisLine: { lineStyle: { color: 'rgba(0, 212, 255, 0.15)' } },
+      axisLine: { lineStyle: { color: 'rgba(129, 140, 248, 0.2)' } },
       axisLabel: { color: 'rgba(148, 163, 184, 0.8)', fontSize: 11 },
       axisTick: { show: false },
     },
     yAxis: {
       type: 'value',
       axisLine: { show: false },
-      splitLine: { lineStyle: { color: 'rgba(0, 212, 255, 0.08)' } },
+      splitLine: { lineStyle: { color: 'rgba(129, 140, 248, 0.08)' } },
       axisLabel: { color: 'rgba(148, 163, 184, 0.7)', fontSize: 11 },
     },
     series: [
@@ -77,16 +84,16 @@ function renderChart() {
         symbol: 'circle',
         symbolSize: 4,
         data: purchase,
-        lineStyle: { width: 2, color: '#00d4ff' },
-        itemStyle: { color: '#00d4ff' },
+        lineStyle: { width: 2, color: accent },
+        itemStyle: { color: accent },
         areaStyle: {
           color: {
             type: 'linear',
             x: 0, y: 0, x2: 0, y2: 1,
             colorStops: [
-              { offset: 0, color: 'rgba(0, 212, 255, 0.35)' },
-              { offset: 0.6, color: 'rgba(0, 212, 255, 0.08)' },
-              { offset: 1, color: 'rgba(0, 212, 255, 0.01)' },
+              { offset: 0, color: 'rgba(129, 140, 248, 0.38)' },
+              { offset: 0.6, color: 'rgba(129, 140, 248, 0.09)' },
+              { offset: 1, color: 'rgba(129, 140, 248, 0.02)' },
             ],
           },
         },
@@ -251,10 +258,10 @@ onUnmounted(() => {
 
 <style lang="scss" scoped>
 .screen {
-  min-height: 100vh;
+  min-height: calc(100vh - 64px);
   position: relative;
   overflow: hidden;
-  color: #e2e8f0;
+  color: var(--screen-text);
 }
 
 .bg-layer {
@@ -267,15 +274,20 @@ onUnmounted(() => {
 .bg-gradient {
   position: absolute;
   inset: 0;
-  background: linear-gradient(160deg, #0a1929 0%, #0d2137 40%, #0a1628 100%);
+  background: linear-gradient(
+    165deg,
+    var(--screen-bg-top) 0%,
+    var(--screen-bg-mid) 45%,
+    var(--screen-bg-bottom) 100%
+  );
 }
 
 .bg-grid {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+    linear-gradient(var(--screen-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--screen-grid) 1px, transparent 1px);
   background-size: 48px 48px;
 }
 
@@ -285,7 +297,7 @@ onUnmounted(() => {
   background: linear-gradient(
     to bottom,
     transparent 0%,
-    rgba(0, 212, 255, 0.02) 50%,
+    var(--screen-glow) 50%,
     transparent 100%
   );
   background-size: 100% 200px;
@@ -304,7 +316,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 20px 32px;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.15);
+  border-bottom: 1px solid var(--screen-border-soft);
 }
 
 .header-left {
@@ -316,14 +328,14 @@ onUnmounted(() => {
 .logo-bar {
   width: 4px;
   height: 32px;
-  background: linear-gradient(180deg, #00d4ff 0%, transparent 100%);
+  background: linear-gradient(180deg, var(--screen-accent-strong) 0%, transparent 100%);
   border-radius: 2px;
 }
 
 .header h1 {
   font-size: 22px;
   font-weight: 600;
-  color: #f1f5f9;
+  color: var(--screen-text);
   letter-spacing: 0.5px;
   margin: 0;
 }
@@ -338,20 +350,20 @@ onUnmounted(() => {
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 18px;
   font-weight: 500;
-  color: #00d4ff;
+  color: var(--screen-accent-strong);
   letter-spacing: 1px;
 }
 
 .refresh-hint {
   font-size: 12px;
-  color: rgba(148, 163, 184, 0.7);
+  color: rgba(148, 163, 184, 0.75);
 }
 
 .main {
   position: relative;
   z-index: 1;
   padding: 24px 32px 32px;
-  min-height: calc(100vh - 80px);
+  min-height: calc(100vh - 64px - 80px);
 }
 
 .stat-section {
@@ -362,9 +374,9 @@ onUnmounted(() => {
 }
 
 .stat-card {
-  background: rgba(13, 33, 55, 0.6);
+  background: var(--screen-panel);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(0, 212, 255, 0.2);
+  border: 1px solid var(--screen-border);
   border-radius: 12px;
   padding: 20px 16px;
   text-align: center;
@@ -372,17 +384,17 @@ onUnmounted(() => {
   transition: all 0.25s ease;
 
   &:hover {
-    border-color: rgba(0, 212, 255, 0.5);
-    box-shadow: 0 0 24px rgba(0, 212, 255, 0.12);
+    border-color: rgba(165, 180, 252, 0.45);
+    box-shadow: 0 0 28px var(--screen-glow);
   }
 
   &.urgent {
-    border-color: rgba(245, 158, 11, 0.5);
+    border-color: rgba(245, 158, 11, 0.45);
     .stat-value { color: #fbbf24; }
   }
 
   &.urgent:hover {
-    box-shadow: 0 0 24px rgba(245, 158, 11, 0.15);
+    box-shadow: 0 0 24px rgba(245, 158, 11, 0.12);
   }
 }
 
@@ -390,14 +402,14 @@ onUnmounted(() => {
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 42px;
   font-weight: 700;
-  color: #00d4ff;
+  color: var(--screen-accent-strong);
   letter-spacing: 2px;
   line-height: 1.2;
 }
 
 .stat-label {
   font-size: 13px;
-  color: rgba(148, 163, 184, 0.9);
+  color: var(--screen-muted);
   margin-top: 8px;
   letter-spacing: 0.3px;
 }
@@ -416,9 +428,9 @@ onUnmounted(() => {
 }
 
 .panel {
-  background: rgba(13, 33, 55, 0.5);
+  background: var(--screen-panel);
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(0, 212, 255, 0.12);
+  border: 1px solid var(--screen-border-soft);
   border-radius: 12px;
   padding: 20px 24px;
 }
@@ -429,26 +441,26 @@ onUnmounted(() => {
   gap: 12px;
   margin-bottom: 16px;
   padding-bottom: 12px;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+  border-bottom: 1px solid var(--screen-border-soft);
 }
 
 .panel-title {
   font-size: 15px;
   font-weight: 600;
-  color: #cbd5e1;
+  color: var(--screen-text);
   letter-spacing: 0.5px;
 }
 
 .panel-sub {
   font-size: 12px;
-  color: rgba(148, 163, 184, 0.6);
+  color: rgba(148, 163, 184, 0.65);
 }
 
 .panel-badge {
   font-size: 11px;
   padding: 2px 8px;
-  background: rgba(0, 212, 255, 0.2);
-  color: #00d4ff;
+  background: rgba(99, 102, 241, 0.25);
+  color: var(--screen-accent-strong);
   border-radius: 4px;
   margin-left: auto;
 }
@@ -465,11 +477,11 @@ onUnmounted(() => {
     width: 6px;
   }
   &::-webkit-scrollbar-track {
-    background: rgba(0, 212, 255, 0.05);
+    background: rgba(99, 102, 241, 0.06);
     border-radius: 3px;
   }
   &::-webkit-scrollbar-thumb {
-    background: rgba(0, 212, 255, 0.2);
+    background: rgba(129, 140, 248, 0.25);
     border-radius: 3px;
   }
 }
@@ -480,12 +492,12 @@ onUnmounted(() => {
   gap: 12px;
   padding: 10px 12px;
   font-size: 13px;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.06);
+  border-bottom: 1px solid var(--screen-border-soft);
   cursor: pointer;
   transition: background 0.2s;
 
   &:hover {
-    background: rgba(0, 212, 255, 0.06);
+    background: rgba(99, 102, 241, 0.08);
   }
 
   &:last-child {
@@ -497,20 +509,20 @@ onUnmounted(() => {
   min-width: 140px;
   font-family: 'Consolas', monospace;
   font-weight: 600;
-  color: #00d4ff;
+  color: var(--screen-accent-strong);
 }
 
-.col-applicant { color: #94a3b8; flex-shrink: 0; }
-.col-name { flex: 1; color: #e2e8f0; min-width: 0; }
-.col-summary { color: #94a3b8; font-size: 12px; flex: 1; min-width: 0; }
-.col-desc { color: #94a3b8; font-size: 12px; flex: 1; min-width: 0; }
+.col-applicant { color: var(--screen-muted); flex-shrink: 0; }
+.col-name { flex: 1; color: var(--screen-text); min-width: 0; }
+.col-summary { color: var(--screen-muted); font-size: 12px; flex: 1; min-width: 0; }
+.col-desc { color: var(--screen-muted); font-size: 12px; flex: 1; min-width: 0; }
 
 .col-tag {
   padding: 2px 8px;
   font-size: 11px;
   border-radius: 4px;
-  background: rgba(0, 212, 255, 0.15);
-  color: #67e8f9;
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--screen-accent-strong);
   flex-shrink: 0;
 }
 
@@ -528,7 +540,7 @@ onUnmounted(() => {
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: #00d4ff;
+  background: var(--screen-accent);
 
   &.on_way { background: #22c55e; box-shadow: 0 0 8px rgba(34, 197, 94, 0.5); }
   &.pending, &.loading { background: #fbbf24; }

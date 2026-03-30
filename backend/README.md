@@ -13,21 +13,36 @@
 # 1. 安装依赖
 pip install -r requirements.txt
 
-# 2. 初始化数据库（创建表 + 演示数据）
+# 2. 初始化数据库（创建表 + 用户/物资 + POCHAIN 完整链路演示数据）
 python init_db.py
 
-# 3. 启动服务
+# 已有旧库、需清理历史垃圾单并重建「完整订单+溯源+库存」时：
+python -m app.demo_dataset_cohesive --force
+
+# 演示单号前缀 POCHAIN-*，溯源可查订单号或交接码；库存为 LOT-* 多批次。
+
+# 3. 启动服务（本机）
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8166
+
+# 3b. 局域网其他设备访问 API 时，请监听所有网卡
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8166
 ```
+
+前端开发服务器已配置 `host: true`，手机/同事电脑可用 `http://你的IP:5173` 打开；后端默认启用 `CORS_ALLOW_PRIVATE_NETWORKS`，会匹配常见内网 IPv4 来源。生产环境请在 `.env` 中设置 `CORS_ALLOW_PRIVATE_NETWORKS=false` 并收紧 `CORS_ORIGINS`。
 
 ## 演示账号
 
-| 用户名     | 密码   | 角色   |
-|------------|--------|--------|
-| admin      | 123456 | 管理员 |
-| procurement| 123456 | 采购员 |
-| supplier1  | 123456 | 供应商 |
-| teacher1   | 123456 | 教师   |
+与 `init_db.py` 一致（密码均为 **123456**）：
+
+| 用户名 | 角色 |
+|--------|------|
+| system_admin | 系统管理员 |
+| logistics_admin | 后勤管理员 |
+| warehouse_procurement | 仓储采购员 |
+| campus_supplier | 校园供应商（已绑定演示供应商） |
+| counselor_teacher | 辅导员/教师 |
+
+旧用户名 `admin` / `procurement` / `supplier` / `teacher` 会在初始化时迁移到新角色。
 
 ## API 文档
 

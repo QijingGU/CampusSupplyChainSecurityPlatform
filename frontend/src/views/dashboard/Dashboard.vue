@@ -15,6 +15,8 @@ import {
   OfficeBuilding,
   Van,
   Monitor,
+  DataAnalysis,
+  Star,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import type { RoleType } from '@/types/role'
@@ -42,9 +44,9 @@ const iconMap: Record<string, object> = {
   ChatDotRound,
 }
 
-// 主色：科技蓝
-const primaryColor = '#165DFF'
-const successColor = '#00B42A'
+// 与全局设计系统、侧栏主色一致（靛蓝 + 青绿）
+const primaryColor = '#4f46e5'
+const successColor = '#0d9488'
 
 // 真实数据（从 API 拉取）
 const stats = ref<{ title: string; value: number; trend: string; trendValue: string; icon: string; path: string }[]>([])
@@ -89,6 +91,7 @@ const shortcuts = computed(() => {
     { icon: ShoppingCart, label: '采购管理', path: '/purchase' },
     { icon: Warning, label: '预警中心', path: '/warning' },
     { icon: Monitor, label: '后勤大屏', path: '/screen/logistics' },
+    { icon: DataAnalysis, label: '供应链全景', path: '/screen/overview' },
   ]
   const warehouseBase = [
     { icon: ChatDotRound, label: 'AI 助手', path: '/ai/chat' },
@@ -96,18 +99,22 @@ const shortcuts = computed(() => {
     { icon: Upload, label: '入库管理', path: '/stock/in' },
     { icon: Box, label: '库存查询', path: '/stock/inventory' },
     { icon: Van, label: '配送管理', path: '/delivery' },
+    { icon: DataAnalysis, label: '供应链全景', path: '/screen/overview' },
+    { icon: Monitor, label: '仓储大屏', path: '/screen/warehouse' },
   ]
   const adminBase = [
     { icon: User, label: '用户管理', path: '/user' },
     { icon: OfficeBuilding, label: '供应商管理', path: '/supplier' },
     { icon: Document, label: '审计与异常监督', path: '/audit' },
     { icon: Connection, label: '溯源查询', path: '/trace' },
+    { icon: DataAnalysis, label: '供应链全景', path: '/screen/overview' },
   ]
   if (userRole.value === 'counselor_teacher') {
     return [
       { icon: ChatDotRound, label: 'AI 申请', path: '/ai/chat' },
       { icon: Document, label: '我的申请', path: '/my-applications' },
       { icon: Connection, label: '溯源', path: '/trace' },
+      { icon: Star, label: '服务评价', path: '/teacher/service-evaluation' },
     ]
   }
   if (userRole.value === 'system_admin') return adminBase
@@ -115,6 +122,7 @@ const shortcuts = computed(() => {
   if (userRole.value === 'campus_supplier') {
     return [
       { icon: List, label: '我的订单', path: '/supplier/orders' },
+      { icon: DataAnalysis, label: '供应链全景', path: '/screen/overview' },
     ]
   }
   return logisticsBase

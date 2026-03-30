@@ -105,6 +105,22 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/screen/LogisticsScreen.vue'),
         meta: { title: '后勤大屏', icon: 'Monitor', roles: ['logistics_admin'] },
       },
+      // 供应链全景大屏（教师端不开放，见路由守卫 roles）
+      {
+        path: 'screen/overview',
+        name: 'SupplyChainOverviewScreen',
+        component: () => import('@/views/screen/SupplyChainOverviewScreen.vue'),
+        meta: {
+          title: '供应链全景大屏',
+          icon: 'Monitor',
+          roles: [
+            'system_admin',
+            'logistics_admin',
+            'warehouse_procurement',
+            'campus_supplier',
+          ],
+        },
+      },
       // 溯源 - 教师、后勤、仓储
       {
         path: 'trace',
@@ -132,6 +148,12 @@ export const routes: RouteRecordRaw[] = [
         name: 'MyApplications',
         component: () => import('@/views/teacher/MyApplications.vue'),
         meta: { title: '我的申请', icon: 'Document', roles: ['counselor_teacher'] },
+      },
+      {
+        path: 'teacher/service-evaluation',
+        name: 'TeacherServiceEvaluation',
+        component: () => import('@/views/teacher/ServiceEvaluationPlaceholder.vue'),
+        meta: { title: '服务评价', icon: 'Star', roles: ['counselor_teacher'] },
       },
       // 校园合作供应商专属 - 我的订单
       {
@@ -180,6 +202,12 @@ export const routes: RouteRecordRaw[] = [
             component: () => import('@/views/security/SecuritySituation.vue'),
             meta: { title: '安全态势感知', hideInMenu: true, roles: ['system_admin'] },
           },
+          {
+            path: 'sandbox',
+            name: 'SecuritySandbox',
+            component: () => import('@/views/security/SecuritySandbox.vue'),
+            meta: { title: '安全沙箱', hideInMenu: true, roles: ['system_admin'] },
+          },
         ],
       },
       {
@@ -196,3 +224,4 @@ export const routes: RouteRecordRaw[] = [
     meta: { public: true },
   },
 ]
+

@@ -187,7 +187,15 @@ onMounted(() => {
             </el-form-item>
           </el-form>
 
-          <p class="demo-hint">演示账号：system_admin / logistics_admin / warehouse_procurement / campus_supplier / counselor_teacher（密码均 123456）</p>
+          <p class="demo-hint">
+            演示账号：system_admin、logistics_admin、warehouse_procurement、campus_supplier、counselor_teacher，密码均为
+            <strong>123456</strong>（与后端 <code>init_db.py</code> 一致；首次部署请先在后端目录执行
+            <code>python init_db.py</code>）
+          </p>
+          <p class="demo-hint demo-hint-tip">
+            局域网访问：后端请用 <code>--host 0.0.0.0</code>；前端 <code>npm run dev</code> 已 <code>host: true</code>，内网段
+            CORS 默认已放开。
+          </p>
           <p class="demo-hint demo-hint-tip">多角色同时演示时，请为每个角色单独开「无痕/隐私窗口」登录，避免 token 互相覆盖</p>
           <router-link to="/upload" class="upload-link">匿名举报 / 反馈材料上传</router-link>
         </div>

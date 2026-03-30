@@ -26,6 +26,31 @@ export interface Purchase {
   goods_summary?: string
 }
 
+export interface PurchaseTimelineItem {
+  stage: string
+  content: string
+  time: string
+}
+
+export interface PurchaseTimelineSummary {
+  purchase_id: number
+  order_no: string
+  status: string
+  status_label: string
+  receiver_name: string
+  destination: string
+  handoff_code: string
+  delivery_count: number
+  deliveries: {
+    delivery_no: string
+    status: string
+    status_label: string
+    receiver_name: string
+    destination: string
+    created_at: string
+  }[]
+}
+
 export function listPurchases(params?: { status?: string }) {
   return request.get<Purchase[]>('/purchase', { params })
 }
@@ -56,4 +81,8 @@ export function rejectPurchase(id: number, reason?: string) {
   return request.put<{ code: number; message: string; order_no: string }>(`/purchase/${id}/reject`, {
     reason,
   })
+}
+
+export function getPurchaseTimeline(id: number) {
+  return request.get<{ summary: PurchaseTimelineSummary; timeline: PurchaseTimelineItem[] }>(`/purchase/${id}/timeline`)
 }

@@ -161,7 +161,7 @@ def list_purchases(
     q = db.query(Purchase).order_by(Purchase.created_at.desc())
     if status:
         q = q.filter(Purchase.status == status)
-    items = q.limit(100).all()
+    items = q.limit(200).all()
     users_by_id = {u.id: u for u in db.query(User).all()}
     return [
         {
@@ -278,3 +278,108 @@ def reject_purchase(
     )
     db.commit()
     return {"code": 200, "message": "已驳回", "order_no": p.order_no}
+
+
+@router.get("/{purchase_id}/timeline")
+def get_purchase_timeline(
+    purchase_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(_purchase_viewer),
+):
+    """单据级闭环时间线：用于展演完整业务链路。"""
+    p = db.query(Purchase).filter(Purchase.id == purchase_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="采购单不存在")
+
+    linked_deliveries = (
+        db.query(Delivery)
+        .filter(Delivery.purchase_id == p.id)
+        .order_by(Delivery.created_at.asc())
+        .all()
+    )
+    delivery_nos = [d.delivery_no for d in linked_deliveries if d.delivery_no]
+
+    # 只拉取“当前采购单”及其“关联配送单号”的追溯，避免串到其它单据
+    trace_batches = {p.order_no}
+    trace_batches.update([x for x in delivery_nos if x])
+    traces = (
+        db.query(TraceRecord)
+        .filter(TraceRecord.batch_no.in_(list(trace_batches)))
+        .order_by(TraceRecord.created_at.asc(), TraceRecord.id.asc())
+        .limit(300)
+        .all()
+    )
+    # 向后兼容：历史脏数据若 batch_no 未写规范，则兜底用 content 精确包含单号补齐
+    if not traces:
+        traces = (
+            db.query(TraceRecord)
+            .filter(TraceRecord.content.contains(p.order_no))
+            .order_by(TraceRecord.created_at.asc(), TraceRecord.id.asc())
+            .limit(120)
+            .all()
+        )
+
+    # 固定阶段顺序，便于展示“成熟闭环”
+    stage_order = {
+        "申请": 10,
+        "审批": 20,
+        "供应商": 30,
+        "入库": 40,
+        "出库": 50,
+        "配送": 60,
+        "签收": 70,
+    }
+
+    timeline = [
+        {
+            "stage": t.stage,
+            "content": t.content,
+            "time": t.created_at.strftime("%Y-%m-%d %H:%M:%S") if t.created_at else "",
+            "_order": stage_order.get(t.stage, 999),
+            "_ts": t.created_at or datetime.min,
+            "_batch": t.batch_no or "",
+        }
+        for t in traces
+    ]
+    # 同时间按阶段排序；先按时间保证“过程可读”，避免看起来阶段乱序/串单
+    timeline.sort(key=lambda x: (x["_ts"], x["_order"], x["time"]))
+    # 去重：同批次+同阶段+同内容+同时间只保留一条
+    deduped: list[dict] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for item in timeline:
+        key = (item.get("_batch", ""), item.get("stage", ""), item.get("content", ""), item.get("time", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    timeline = deduped
+    for item in timeline:
+        item.pop("_order", None)
+        item.pop("_ts", None)
+        item.pop("_batch", None)
+
+    summary = {
+        "purchase_id": p.id,
+        "order_no": p.order_no,
+        "status": p.status,
+        "status_label": get_purchase_status_label(p.status),
+        "receiver_name": p.receiver_name or "",
+        "destination": p.destination or "",
+        "handoff_code": p.handoff_code or "",
+        "delivery_count": len(linked_deliveries),
+        "deliveries": [
+            {
+                "delivery_no": d.delivery_no,
+                "status": d.status,
+                "status_label": get_delivery_status_label(d.status),
+                "receiver_name": d.receiver_name or "",
+                "destination": d.destination or "",
+                "created_at": d.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                if d.created_at
+                else "",
+            }
+            for d in linked_deliveries
+        ],
+    }
+
+    return {"summary": summary, "timeline": timeline}

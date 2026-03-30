@@ -16,6 +16,12 @@ const userStore = useUserStore()
 const noticeStore = useNoticeStore()
 const sidebarCollapsed = ref(false)
 
+/** 数据大屏与侧栏、顶栏统一深色指挥台，避免浅色导航压在霓虹内容上 */
+const immersiveScreen = computed(() => {
+  const p = route.path || ''
+  return p.startsWith('/screen/')
+})
+
 const pageTitle = computed(() => (route.meta?.title as string) || '')
 const role = computed(() => userStore.userInfo?.role as string)
 
@@ -208,6 +214,19 @@ function initLogisticsWarningCheck() {
   })
 }
 
+function syncImmersiveBodyClass(on: boolean) {
+  if (typeof document === 'undefined') return
+  document.body.classList.toggle('layout-immersive', on)
+}
+
+watch(
+  immersiveScreen,
+  (v) => {
+    syncImmersiveBodyClass(v)
+  },
+  { immediate: true }
+)
+
 onMounted(async () => {
   await refreshAll({ silent: true })
   await markCurrentAsSeen()
@@ -230,15 +249,23 @@ watch(
   }
 )
 
-onBeforeUnmount(stopPolling)
+onBeforeUnmount(() => {
+  stopPolling()
+  syncImmersiveBodyClass(false)
+})
 </script>
 
 <template>
-  <div class="app-layout">
-    <AppSidebar v-model:collapsed="sidebarCollapsed" />
-    <div class="main-wrapper" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
-      <AppHeader :title="pageTitle" :collapsed="sidebarCollapsed" @toggle="sidebarCollapsed = !sidebarCollapsed" />
-      <main class="main-content">
+  <div class="app-layout" :class="{ 'app-layout--immersive': immersiveScreen }">
+    <AppSidebar v-model:collapsed="sidebarCollapsed" :immersive="immersiveScreen" />
+    <div class="main-wrapper" :class="{ 'sidebar-collapsed': sidebarCollapsed, 'main-wrapper--immersive': immersiveScreen }">
+      <AppHeader
+        :title="pageTitle"
+        :collapsed="sidebarCollapsed"
+        :immersive="immersiveScreen"
+        @toggle="sidebarCollapsed = !sidebarCollapsed"
+      />
+      <main class="main-content" :class="{ 'main-content--immersive': immersiveScreen }">
         <Transition name="page" mode="out-in">
           <router-view v-slot="{ Component }">
             <component :is="Component" />
@@ -273,6 +300,21 @@ onBeforeUnmount(stopPolling)
   flex: 1;
   padding: 24px;
   overflow-y: auto;
+}
+
+.app-layout--immersive {
+  background: var(--screen-bg-mid);
+}
+
+.main-wrapper--immersive {
+  background: transparent;
+}
+
+.main-content--immersive {
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: transparent;
 }
 
 .page-enter-active,

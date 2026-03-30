@@ -2,10 +2,20 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { WarningFilled, Close } from '@element-plus/icons-vue'
-import { listPurchases, approvePurchase, rejectPurchase } from '@/api/purchase'
+import {
+  listPurchases,
+  approvePurchase,
+  rejectPurchase,
+  getPurchaseTimeline,
+} from '@/api/purchase'
 import { listSuppliers } from '@/api/supplier'
+import { listInventory, type InventoryItem } from '@/api/stock'
 import { isAbnormalOrder, setApprovalAlert, addMisapprovalRecord } from '@/stores/demo'
-import type { Purchase } from '@/api/purchase'
+import type {
+  Purchase,
+  PurchaseTimelineItem,
+  PurchaseTimelineSummary,
+} from '@/api/purchase'
 import type { Supplier } from '@/api/supplier'
 
 const loading = ref(false)
@@ -17,6 +27,50 @@ const closedReportAt = ref(0)
 const tableData = ref<Purchase[]>([])
 const statusFilter = ref<string>('')
 const suppliers = ref<Supplier[]>([])
+const timelineVisible = ref(false)
+const timelineLoading = ref(false)
+const timelineSummary = ref<PurchaseTimelineSummary | null>(null)
+const timelineItems = ref<PurchaseTimelineItem[]>([])
+
+const invLoading = ref(false)
+const invSummary = ref<{ goods_name: string; quantity: number; unit: string; low: boolean }[]>([])
+
+function buildInventorySummary(rows: InventoryItem[]) {
+  const map = new Map<string, { quantity: number; unit: string; low: boolean }>()
+  for (const r of rows) {
+    const cur = map.get(r.goods_name) || { quantity: 0, unit: r.unit || '件', low: false }
+    cur.quantity += Number(r.quantity || 0)
+    cur.unit = r.unit || cur.unit
+    cur.low = cur.low || r.is_low_stock
+    map.set(r.goods_name, cur)
+  }
+  const all = [...map.entries()].map(([goods_name, v]) => ({ goods_name, ...v }))
+  const prefer = ['消毒酒精', '薯片', '玻片']
+  const out: { goods_name: string; quantity: number; unit: string; low: boolean }[] = []
+  for (const n of prefer) {
+    const f = all.find((a) => a.goods_name === n)
+    if (f) out.push(f)
+  }
+  const rest = all.filter((a) => !out.some((o) => o.goods_name === a.goods_name))
+  rest.sort((a, b) => a.quantity - b.quantity)
+  while (out.length < 4 && rest.length) {
+    out.push(rest.shift()!)
+  }
+  return out
+}
+
+async function fetchInventorySummary() {
+  invLoading.value = true
+  try {
+    const res: any = await listInventory()
+    const rows: InventoryItem[] = Array.isArray(res) ? res : res?.data ?? []
+    invSummary.value = buildInventorySummary(rows)
+  } catch {
+    invSummary.value = []
+  } finally {
+    invLoading.value = false
+  }
+}
 
 const statusLabels: Record<string, string> = {
   pending: '待审批',
@@ -51,6 +105,11 @@ async function fetchData() {
   } finally {
     loading.value = false
   }
+}
+
+async function refreshPurchasePage() {
+  await fetchData()
+  await fetchInventorySummary()
 }
 
 async function fetchSuppliers() {
@@ -120,7 +179,7 @@ async function doRejectFromReport() {
     aiReportVisible.value = false
     aiReportRow.value = null
     selectedRejectReason.value = ''
-    fetchData()
+    await refreshPurchasePage()
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || e?.message || '驳回失败')
   }
@@ -185,7 +244,7 @@ async function handleApprove(row: Purchase) {
     const res: any = await approvePurchase(row.id, supplierId)
     const result = res?.data ?? res
     ElMessage.success(result?.message || '审批通过')
-    fetchData()
+    await refreshPurchasePage()
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || e?.message || '审批失败')
   }
@@ -204,7 +263,7 @@ async function handleReject(row: Purchase) {
     })
     await rejectPurchase(row.id, value || undefined)
     ElMessage.success('已驳回')
-    fetchData()
+    await refreshPurchasePage()
   } catch (e: any) {
     if (e !== 'cancel') {
       ElMessage.error(e?.response?.data?.detail || e?.message || '操作失败')
@@ -212,9 +271,26 @@ async function handleReject(row: Purchase) {
   }
 }
 
+async function openTimeline(row: Purchase) {
+  timelineVisible.value = true
+  timelineLoading.value = true
+  timelineSummary.value = null
+  timelineItems.value = []
+  try {
+    const res: any = await getPurchaseTimeline(row.id)
+    const data = res?.data ?? res
+    timelineSummary.value = data?.summary ?? null
+    timelineItems.value = data?.timeline ?? []
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '加载闭环失败')
+  } finally {
+    timelineLoading.value = false
+  }
+}
+
 onMounted(async () => {
   await fetchSuppliers()
-  fetchData()
+  await refreshPurchasePage()
 })
 </script>
 
@@ -227,13 +303,22 @@ onMounted(async () => {
       </div>
       <el-button type="primary" @click="handleStartPurchase">发起采购</el-button>
     </div>
-    <div v-if="true" class="inventory-box">
-      <span class="inv-title">库存联动（演示）：</span>
-      <span class="inv-item ok">玻片：25套（充足）</span>
-      <span class="inv-item fail">酒精：6瓶（不足）</span>
+    <div v-if="invSummary.length || invLoading" v-loading="invLoading" class="inventory-box">
+      <span class="inv-title">库存联动（实时）：</span>
+      <template v-if="!invLoading && invSummary.length">
+        <span
+          v-for="(it, i) in invSummary"
+          :key="i"
+          class="inv-item"
+          :class="it.low ? 'fail' : 'ok'"
+        >
+          {{ it.goods_name }}：{{ it.quantity }}{{ it.unit }}（{{ it.low ? '偏低' : '正常' }}）
+        </span>
+      </template>
+      <span v-else-if="!invLoading" class="inv-muted">暂无库存数据</span>
     </div>
     <div class="filter-bar">
-      <el-radio-group v-model="statusFilter" @change="fetchData">
+      <el-radio-group v-model="statusFilter" @change="refreshPurchasePage">
         <el-radio-button label="">全部</el-radio-button>
         <el-radio-button label="pending">待审批</el-radio-button>
         <el-radio-button label="approved">待接单</el-radio-button>
@@ -271,6 +356,7 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
+            <el-button type="primary" link size="small" @click="openTimeline(row)">闭环</el-button>
             <template v-if="row.status === 'pending'">
               <el-button type="success" size="small" @click="handleApprove(row)">通过</el-button>
               <el-button type="danger" size="small" @click="handleReject(row)">驳回</el-button>
@@ -279,6 +365,26 @@ onMounted(async () => {
         </el-table-column>
       </el-table>
     </div>
+
+    <el-dialog v-model="timelineVisible" title="采购闭环时间线" width="760px">
+      <div v-loading="timelineLoading">
+        <div v-if="timelineSummary" class="timeline-summary">
+          <div><strong>单号：</strong>{{ timelineSummary.order_no }}</div>
+          <div><strong>状态：</strong>{{ timelineSummary.status_label }}</div>
+          <div><strong>收货人/地点：</strong>{{ timelineSummary.receiver_name || '-' }} / {{ timelineSummary.destination || '-' }}</div>
+          <div><strong>交接码：</strong>{{ timelineSummary.handoff_code || '-' }}</div>
+        </div>
+        <el-timeline v-if="timelineItems.length" class="timeline-list">
+          <el-timeline-item v-for="(item, i) in timelineItems" :key="i" :timestamp="item.time">
+            <div class="timeline-row">
+              <span class="timeline-stage">{{ item.stage }}</span>
+              <span class="timeline-content">{{ item.content }}</span>
+            </div>
+          </el-timeline-item>
+        </el-timeline>
+        <div v-else class="empty-timeline">暂无闭环记录</div>
+      </div>
+    </el-dialog>
 
     <!-- AI 风控分析报告弹窗 -->
     <el-dialog
@@ -329,11 +435,22 @@ onMounted(async () => {
   .inv-item { margin-right: 16px; }
   .inv-item.ok { color: var(--el-color-success); }
   .inv-item.fail { color: var(--el-color-danger); }
+  .inv-muted { color: var(--text-muted); }
 }
 .page-header h2 { margin: 0; font-size: 18px; }
 .filter-bar { margin-bottom: 16px; }
 .page-desc { margin: 4px 0 0 0; font-size: 13px; color: var(--text-muted); }
 .table-card { padding: 20px; background: var(--bg-card); border-radius: 12px; }
+.timeline-summary {
+  margin-bottom: 16px; padding: 12px 14px;
+  border: 1px solid var(--border-subtle); border-radius: 8px;
+  background: var(--bg-hover); display: grid; gap: 6px; font-size: 13px;
+}
+.timeline-list { max-height: 420px; overflow-y: auto; }
+.timeline-row { display: flex; gap: 12px; }
+.timeline-stage { min-width: 64px; color: var(--primary); font-weight: 600; }
+.timeline-content { color: var(--text-secondary); }
+.empty-timeline { color: var(--text-muted); padding: 12px 0; }
 
 :deep(.ai-report-dialog) {
   .el-dialog__header { padding: 0; margin: 0; }

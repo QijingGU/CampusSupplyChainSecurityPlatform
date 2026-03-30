@@ -2,6 +2,19 @@ from sqlalchemy import inspect, text
 
 
 SCHEMA_PATCHES: dict[str, dict[str, str]] = {
+    "ids_events": {
+        "ai_analysis": "TEXT",
+        "ai_risk_level": "VARCHAR(32)",
+        "ai_confidence": "INTEGER",
+        "ai_analyzed_at": "DATETIME",
+        "status": "VARCHAR(32)",
+        "review_note": "TEXT",
+        "action_taken": "VARCHAR(128)",
+        "risk_score": "INTEGER",
+        "confidence": "INTEGER",
+        "hit_count": "INTEGER",
+        "detect_detail": "TEXT",
+    },
     "purchases": {
         "approved_by_id": "INTEGER",
         "rejected_reason": "TEXT",

@@ -2,9 +2,9 @@ from pathlib import Path
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from .config import settings
+from .config import settings, PRIVATE_LAN_CORS_REGEX
 from .database import engine, Base
-from .api import auth, goods, ai, purchase, supplier, trace, warning, stock, delivery, dashboard, audit, ids, upload
+from .api import auth, goods, ai, purchase, supplier, trace, warning, stock, delivery, dashboard, overview, audit, ids, upload
 from .middleware.ids_middleware import IDSMiddleware
 from .schema_sync import ensure_schema
 
@@ -14,13 +14,15 @@ ensure_schema(engine)
 
 app = FastAPI(title="校园物资供应链安全监测平台 API", version="1.0.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_cors_kw: dict = {
+    "allow_origins": settings.CORS_ORIGINS,
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+if settings.CORS_ALLOW_PRIVATE_NETWORKS:
+    _cors_kw["allow_origin_regex"] = PRIVATE_LAN_CORS_REGEX
+app.add_middleware(CORSMiddleware, **_cors_kw)
 app.add_middleware(IDSMiddleware)
 
 
@@ -72,6 +74,7 @@ app.include_router(warning.router, prefix="/api")
 app.include_router(stock.router, prefix="/api")
 app.include_router(delivery.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
+app.include_router(overview.router, prefix="/api")
 app.include_router(audit.router, prefix="/api")
 app.include_router(ids.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
@@ -91,3 +94,4 @@ def root():
 def favicon():
     from fastapi.responses import Response
     return Response(status_code=204)
+

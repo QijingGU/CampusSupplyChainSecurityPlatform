@@ -1,18 +1,52 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
-import { publicUpload } from '@/api/upload'
-import type { UploadResult } from '@/api/upload'
+
+export interface UploadResponse {
+  ok: boolean
+  filename?: string
+  saved_as?: string
+  size?: number
+  url?: string
+  security_alert?: {
+    style?: string
+    http_status_hint?: number
+    title?: string
+    message?: string
+    detail?: string
+  }
+}
 
 const loading = ref(false)
 const fileList = ref<File[]>([])
-const lastResult = ref<UploadResult | null>(null)
+const lastResult = ref<UploadResponse | null>(null)
 
 function onFileChange(files: FileList | null) {
   fileList.value = files ? Array.from(files) : []
 }
 
+/**
+ * 上传接口地址：
+ * - 默认同源 `/api/upload`（Vite 代理或 Nginx 反代）
+ * - 若配置了 `VITE_PUBLIC_UPLOAD_URL` 则优先（完整 URL）
+ * - 若 `VITE_API_BASE` 为完整 URL（如局域网直连后端 http://192.168.x.x:8166/api），则使用 `${VITE_API_BASE}/upload`
+ */
+function resolveUploadUrl(): string {
+  const custom = import.meta.env.VITE_PUBLIC_UPLOAD_URL as string | undefined
+  if (custom?.trim()) return custom.trim()
+  const apiBase = import.meta.env.VITE_API_BASE as string | undefined
+  if (apiBase?.trim()) {
+    const b = apiBase.replace(/\/$/, '')
+    return `${b}/upload`
+  }
+  return '/api/upload'
+}
+
+/**
+ * 上传成功落盘，但不弹「上传成功」；
+ * 若响应含 security_alert，仅弹 403 风格 + 木马告警浮窗（演示）。
+ */
 async function handleUpload() {
   if (fileList.value.length === 0) {
     ElMessage.warning('请选择文件')
@@ -22,15 +56,41 @@ async function handleUpload() {
   loading.value = true
   lastResult.value = null
   try {
-    const data: any = await publicUpload(file)
-    if (data?.ok) {
-      lastResult.value = data
-      ElMessage.success(`上传成功：${data.filename}`)
-    } else {
-      ElMessage.error(data?.detail || '上传失败')
+    const form = new FormData()
+    form.append('file', file)
+    const res = await fetch(resolveUploadUrl(), {
+      method: 'POST',
+      body: form,
+      credentials: 'include',
+    })
+    const j = (await res.json().catch(() => ({}))) as UploadResponse
+    if (!res.ok) {
+      const detail =
+        typeof (j as any).detail === 'string'
+          ? (j as any).detail
+          : `请求失败 (${res.status})`
+      ElMessage.error(detail)
+      return
     }
-  } catch {
-    // error handled by request interceptor
+    if (j.ok && j.security_alert) {
+      lastResult.value = j
+      const sa = j.security_alert
+      const body = [sa.message, sa.detail].filter(Boolean).join('\n\n')
+      await ElMessageBox.alert(body, sa.title || '403 Forbidden · 木马告警（演示）', {
+        type: 'error',
+        confirmButtonText: '已知晓',
+        customClass: 'public-upload-malware-dialog',
+      })
+      return
+    }
+    if (j.ok) {
+      lastResult.value = j
+      ElMessage.success(`上传成功：${j.filename || ''}`)
+    } else {
+      ElMessage.error('上传失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '网络错误')
   } finally {
     loading.value = false
   }
@@ -72,20 +132,42 @@ function clearAll() {
         </div>
       </div>
 
-      <div v-if="lastResult" class="result-box">
-        <h4>上传结果</h4>
+      <div v-if="lastResult?.ok && lastResult.saved_as" class="result-box" :class="{ 'result-box--warn': lastResult.security_alert }">
+        <h4>{{ lastResult.security_alert ? '上传已落盘（功能正常）' : '上传结果' }}</h4>
         <p>文件名：{{ lastResult.filename }}</p>
         <p>保存为：{{ lastResult.saved_as }}</p>
         <p>大小：{{ lastResult.size }} 字节</p>
         <a v-if="lastResult.url" :href="lastResult.url" target="_blank" rel="noopener">访问文件</a>
+        <p v-if="lastResult.security_alert" class="result-note">
+          上方已弹出「403 + 木马告警」演示浮窗；文件实际已写入服务器，供管理员在隔离区查看。
+        </p>
       </div>
 
-      <p class="hint">无需登录即可上传 · 支持任意格式</p>
+      <p class="hint">
+        无需登录即可上传 · 局域网请用本机 IP 访问前端（如 http://192.168.x.x:5173/upload），勿用 127.0.0.1 代替对方电脑。
+      </p>
     </div>
 
     <router-link to="/login" class="back-link">返回登录</router-link>
   </div>
 </template>
+
+<style lang="scss">
+/* MessageBox 全局挂载：加深 403/木马告警视觉 */
+.el-overlay-dialog .public-upload-malware-dialog.el-message-box {
+  border: 1px solid #fecaca;
+  background: linear-gradient(180deg, #fff5f5 0%, #ffffff 100%);
+}
+.el-overlay-dialog .public-upload-malware-dialog .el-message-box__title {
+  color: #b91c1c;
+  font-weight: 700;
+}
+.el-overlay-dialog .public-upload-malware-dialog .el-message-box__message {
+  color: #7f1d1d;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+</style>
 
 <style lang="scss" scoped>
 .upload-page {
@@ -200,11 +282,24 @@ function clearAll() {
   }
 }
 
+.result-box--warn {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+}
+
+.result-note {
+  margin-top: 10px !important;
+  font-size: 12px !important;
+  color: #92400e !important;
+  line-height: 1.45;
+}
+
 .hint {
   margin-top: 20px;
   font-size: 12px;
   color: var(--text-muted);
   text-align: center;
+  line-height: 1.5;
 }
 
 .back-link {

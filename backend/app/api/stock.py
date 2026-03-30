@@ -296,7 +296,7 @@ def list_stock_in(
     db: Session = Depends(get_db),
     current_user: User = Depends(_stock_viewer),
 ):
-    items = db.query(StockIn).order_by(StockIn.created_at.desc()).limit(50).all()
+    items = db.query(StockIn).order_by(StockIn.created_at.desc()).limit(200).all()
     return [{"id": x.id, "order_no": x.order_no, "goods_name": x.goods_name, "quantity": x.quantity, "unit": x.unit, "batch_no": x.batch_no or "", "purchase_id": x.purchase_id, "created_at": x.created_at.isoformat() if x.created_at else None} for x in items]
 
 
@@ -305,7 +305,7 @@ def list_stock_out(
     db: Session = Depends(get_db),
     current_user: User = Depends(_stock_viewer),
 ):
-    items = db.query(StockOut).order_by(StockOut.created_at.desc()).limit(50).all()
+    items = db.query(StockOut).order_by(StockOut.created_at.desc()).limit(200).all()
     return [
         {
             "id": x.id,
@@ -334,4 +334,38 @@ def list_inventory(
     if keyword:
         q = q.filter(Inventory.goods_name.contains(keyword))
     items = q.all()
-    return [{"id": x.id, "goods_name": x.goods_name, "category": x.category, "quantity": x.quantity, "unit": x.unit, "batch_no": x.batch_no, "updated_at": x.updated_at.isoformat() if x.updated_at else None} for x in items]
+    goods_map = {g.name: g for g in db.query(Goods).all()}
+    now = datetime.utcnow()
+
+    result = []
+    for x in items:
+        g = goods_map.get(x.goods_name)
+        safe_qty = 20 if g and (g.safety_level in ("critical", "high")) else 10
+        is_low_stock = float(x.quantity or 0) < safe_qty
+
+        days_to_expire = None
+        if x.produced_at and x.shelf_life_days:
+            expire_at = x.produced_at + timedelta(days=x.shelf_life_days)
+            expire_naive = (
+                expire_at.replace(tzinfo=None)
+                if getattr(expire_at, "tzinfo", None)
+                else expire_at
+            )
+            days_to_expire = (expire_naive - now).days
+
+        result.append(
+            {
+                "id": x.id,
+                "goods_name": x.goods_name,
+                "category": x.category,
+                "quantity": x.quantity,
+                "unit": x.unit,
+                "batch_no": x.batch_no,
+                "safe_qty": safe_qty,
+                "is_low_stock": is_low_stock,
+                "days_to_expire": days_to_expire,
+                "updated_at": x.updated_at.isoformat() if x.updated_at else None,
+            }
+        )
+
+    return result

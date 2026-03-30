@@ -26,31 +26,44 @@ async function load() {
   }
 }
 
+function cssVar(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return v || fallback
+}
+
 function renderChart() {
   const el = document.getElementById('wh-chart')
   if (!el || !data.value?.chart) return
   if (!chartInstance) chartInstance = echarts.init(el)
   const { labels, in: inVals, out: outVals } = data.value.chart
+  const accent = cssVar('--screen-accent', '#818cf8')
+  const outColor = cssVar('--success', '#0d9488')
   chartInstance.setOption({
     backgroundColor: 'transparent',
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['入库', '出库'], textStyle: { color: '#e5e7eb', fontSize: 12 }, top: 8 },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(15, 23, 42, 0.92)',
+      borderColor: 'rgba(129, 140, 248, 0.35)',
+      textStyle: { color: '#e2e8f0', fontSize: 12 },
+    },
+    legend: { data: ['入库', '出库'], textStyle: { color: 'rgba(226,232,240,0.85)', fontSize: 12 }, top: 8 },
     grid: { left: 48, right: 24, top: 36, bottom: 24 },
     xAxis: {
       type: 'category',
       data: labels,
-      axisLine: { lineStyle: { color: '#4b5563' } },
-      axisLabel: { color: '#9ca3af', fontSize: 11 },
+      axisLine: { lineStyle: { color: 'rgba(129, 140, 248, 0.25)' } },
+      axisLabel: { color: 'rgba(148, 163, 184, 0.9)', fontSize: 11 },
     },
     yAxis: {
       type: 'value',
       axisLine: { show: false },
-      splitLine: { lineStyle: { color: '#374151' } },
-      axisLabel: { color: '#9ca3af', fontSize: 11 },
+      splitLine: { lineStyle: { color: 'rgba(99, 102, 241, 0.1)' } },
+      axisLabel: { color: 'rgba(148, 163, 184, 0.85)', fontSize: 11 },
     },
     series: [
-      { name: '入库', type: 'bar', data: inVals, itemStyle: { color: '#3b82f6' } },
-      { name: '出库', type: 'bar', data: outVals, itemStyle: { color: '#10b981' } },
+      { name: '入库', type: 'bar', data: inVals, itemStyle: { color: accent } },
+      { name: '出库', type: 'bar', data: outVals, itemStyle: { color: outColor } },
     ],
   })
 }
@@ -178,7 +191,7 @@ onUnmounted(() => {
                 <span class="desc">收货人：{{ task.receiver_name }} · 地点：{{ task.destination }}</span>
                 <span class="desc">交接码：{{ task.handoff_code }}</span>
                 <span class="desc">{{ task.summary }}</span>
-                <span class="task-actions" @click.stop>
+                <span class="task-actions screen-el-actions" @click.stop>
                   <el-button
                     v-if="task.status === 'shipped' || task.status === 'approved'"
                     type="primary"
@@ -243,10 +256,15 @@ onUnmounted(() => {
 
 <style lang="scss" scoped>
 .warehouse-screen {
-  min-height: 100vh;
-  background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
-  color: #e5e7eb;
-  padding: 24px;
+  min-height: calc(100vh - 64px);
+  background: linear-gradient(
+    145deg,
+    var(--screen-bg-top) 0%,
+    var(--screen-bg-mid) 48%,
+    var(--screen-bg-bottom) 100%
+  );
+  color: var(--screen-text);
+  padding: 24px 28px 32px;
 }
 
 .screen-header {
@@ -254,8 +272,8 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 24px;
-  h1 { font-size: 28px; font-weight: 700; color: #f8fafc; }
-  .refresh-hint { font-size: 12px; color: #94a3b8; }
+  h1 { font-size: 26px; font-weight: 700; color: var(--screen-text); letter-spacing: 0.02em; }
+  .refresh-hint { font-size: 12px; color: var(--screen-muted); }
 }
 
 .screen-body { min-height: 400px; }
@@ -268,20 +286,24 @@ onUnmounted(() => {
 }
 
 .stat-card {
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid #334155;
-  border-radius: 16px;
-  padding: 28px;
+  background: var(--screen-panel);
+  border: 1px solid var(--screen-border-soft);
+  border-radius: 14px;
+  padding: 24px 20px;
   text-align: center;
   cursor: pointer;
-  transition: all 0.2s;
-  &:hover { border-color: #3b82f6; background: rgba(59, 130, 246, 0.1); }
-  &.warning:hover { border-color: #f59e0b; }
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  &:hover {
+    border-color: rgba(165, 180, 252, 0.4);
+    box-shadow: 0 0 24px var(--screen-glow);
+    background: rgba(15, 23, 42, 0.82);
+  }
+  &.warning:hover { border-color: rgba(251, 191, 36, 0.45); }
 }
 
-.stat-value { font-size: 36px; font-weight: 700; color: #60a5fa; }
+.stat-value { font-size: 34px; font-weight: 700; color: var(--screen-accent-strong); }
 .stat-card.warning .stat-value { color: #fbbf24; }
-.stat-label { font-size: 14px; color: #94a3b8; margin-top: 8px; }
+.stat-label { font-size: 13px; color: var(--screen-muted); margin-top: 8px; }
 
 .content-row {
   display: grid;
@@ -295,11 +317,11 @@ onUnmounted(() => {
 }
 
 .panel {
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid #334155;
+  background: var(--screen-panel);
+  border: 1px solid var(--screen-border-soft);
   border-radius: 12px;
   padding: 20px;
-  h3 { font-size: 16px; margin-bottom: 16px; color: #cbd5e1; }
+  h3 { font-size: 15px; margin-bottom: 16px; color: var(--screen-text); font-weight: 600; }
 }
 
 .chart-panel .chart { height: 260px; }
@@ -311,18 +333,18 @@ onUnmounted(() => {
   flex-wrap: wrap;
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px solid #334155;
+  border-bottom: 1px solid var(--screen-border-soft);
   font-size: 13px;
-  .name { flex: 1; color: #e5e7eb; }
-  .val, .desc { color: #94a3b8; }
+  .name { flex: 1; color: var(--screen-text); }
+  .val, .desc { color: var(--screen-muted); }
   .tag { padding: 2px 8px; border-radius: 4px; font-size: 11px; }
-  .tag.high { background: #dc2626; color: #fff; }
-  .tag.medium { background: #d97706; color: #fff; }
+  .tag.high { background: rgba(220, 38, 38, 0.45); color: #fecaca; }
+  .tag.medium { background: rgba(180, 83, 9, 0.4); color: #fef3c7; }
   &.clickable { cursor: pointer; }
-  &.clickable:hover { background: rgba(59, 130, 246, 0.06); }
+  &.clickable:hover { background: rgba(99, 102, 241, 0.08); }
   .desc { width: 100%; }
 }
 .list-item.alert .desc { flex: 1; font-size: 12px; }
 .task-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.empty { color: #64748b; padding: 20px; text-align: center; }
+.empty { color: var(--screen-muted); padding: 20px; text-align: center; opacity: 0.85; }
 </style>

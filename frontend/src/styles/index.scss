@@ -1,4 +1,5 @@
 @use './variables.scss';
+@use './security-hud-shared.scss';
 
 // 全局重置
 *,
@@ -116,6 +117,53 @@ body {
 }
 
 // 安全中心：全屏科技风，下拉/抽屉等 teleport 到 body 的组件暗色
+/* 沉浸大屏路由：侧栏/顶栏与主内容区同一深色语境 */
+body.layout-immersive {
+  background: var(--screen-bg-mid);
+}
+
+body.layout-immersive {
+  .el-loading-mask {
+    background-color: rgba(10, 14, 26, 0.72) !important;
+  }
+  .el-loading-spinner .path {
+    stroke: var(--screen-accent) !important;
+  }
+}
+
+/* 大屏内 Element 操作钮：降饱和描边，避免高亮按钮与深色面板抢视觉 */
+.screen-el-actions {
+  .el-button--primary {
+    background: linear-gradient(180deg, #4f46e5 0%, #4338ca 100%) !important;
+    border: 1px solid rgba(165, 180, 252, 0.45) !important;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+    color: #f8fafc !important;
+  }
+  .el-button--primary:hover {
+    border-color: rgba(199, 210, 254, 0.55) !important;
+    filter: brightness(1.06);
+  }
+  .el-button--success {
+    background: rgba(13, 148, 136, 0.35) !important;
+    border: 1px solid rgba(45, 212, 191, 0.35) !important;
+    color: #ccfbf1 !important;
+  }
+  .el-button--success:hover {
+    background: rgba(13, 148, 136, 0.5) !important;
+  }
+  .el-button--warning {
+    background: rgba(180, 83, 9, 0.35) !important;
+    border: 1px solid rgba(251, 191, 36, 0.35) !important;
+    color: #fef3c7 !important;
+  }
+  .el-button--warning:hover {
+    background: rgba(180, 83, 9, 0.48) !important;
+  }
+  .el-button--info.is-link {
+    color: var(--screen-accent-strong) !important;
+  }
+}
+
 body.security-center-active {
   .el-select-dropdown,
   .el-picker-panel,

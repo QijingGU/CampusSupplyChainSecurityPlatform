@@ -26,9 +26,10 @@ import {
   Monitor,
   Location,
   Lock,
+  Star,
 } from '@element-plus/icons-vue'
 
-const props = defineProps<{ collapsed: boolean }>()
+const props = defineProps<{ collapsed: boolean; immersive?: boolean }>()
 defineEmits<{ (e: 'update:collapsed', v: boolean): void }>()
 
 const route = useRoute()
@@ -54,6 +55,7 @@ const iconMap: Record<string, object> = {
   List,
   Monitor,
   Location,
+  Star,
 }
 
 const userRole = computed(() => userStore.userInfo?.role as RoleType | undefined)
@@ -103,7 +105,7 @@ function getBadgeCount(path: string) {
 </script>
 
 <template>
-  <aside class="sidebar" :class="{ collapsed: collapsed }">
+  <aside class="sidebar" :class="{ collapsed: collapsed, immersive: immersive }">
     <div class="logo">
       <div class="logo-icon">
         <span class="icon-text">链</span>
@@ -200,6 +202,56 @@ function getBadgeCount(path: string) {
   flex-direction: column;
   z-index: 100;
   transition: width var(--transition-base);
+
+  &.immersive {
+    background: var(--screen-chrome-bg);
+    border-right: 1px solid var(--screen-chrome-border);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
+
+    .logo {
+      border-bottom-color: var(--screen-chrome-border);
+    }
+
+    .logo-text {
+      color: var(--screen-text);
+    }
+
+    .nav-item {
+      color: rgba(226, 232, 240, 0.72);
+
+      &:hover {
+        background: rgba(99, 102, 241, 0.18);
+        color: var(--screen-accent-strong);
+      }
+
+      &.active {
+        background: rgba(99, 102, 241, 0.24);
+        color: var(--screen-accent-strong);
+        box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.2);
+      }
+    }
+
+    .nav-group-title {
+      color: rgba(148, 163, 184, 0.65);
+    }
+
+    .sidebar-footer {
+      border-top-color: var(--screen-chrome-border);
+    }
+
+    .collapse-btn {
+      color: rgba(148, 163, 184, 0.85);
+
+      &:hover {
+        background: rgba(99, 102, 241, 0.15);
+        color: var(--screen-accent-strong);
+      }
+    }
+
+    :deep(.el-badge__content) {
+      border-color: var(--screen-panel-solid);
+    }
+  }
 
   &.collapsed {
     width: 68px;

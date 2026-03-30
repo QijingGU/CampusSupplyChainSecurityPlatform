@@ -386,7 +386,7 @@ watch(attacks, () => { if (worldData.value && mapContainerRef.value) drawAttackL
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: #050505;
+  background: var(--sec-hud-page-bg);
   color: #fff;
   font-family: inherit;
   overflow: hidden;
@@ -406,7 +406,9 @@ watch(attacks, () => { if (worldData.value && mapContainerRef.value) drawAttackL
 .header-bg {
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at 50% -20%, rgba(59,130,246,0.1), transparent);
+  background:
+    radial-gradient(circle at 50% -20%, rgba(34, 211, 238, 0.08), transparent 55%),
+    radial-gradient(circle at 50% -20%, rgba(59, 130, 246, 0.08), transparent);
   pointer-events: none;
 }
 .header-left, .header-center, .header-right {
@@ -460,8 +462,17 @@ watch(attacks, () => { if (worldData.value && mapContainerRef.value) drawAttackL
   width: 100%;
   justify-content: center;
 }
-.title-deco .line { flex: 1; height: 1px; background: linear-gradient(to right, transparent, rgba(59,130,246,0.4), transparent); }
-.subtitle { font-size: 12px; font-family: monospace; color: rgba(96,165,250,0.5); letter-spacing: 0.7em; white-space: nowrap; font-weight: 700; margin: 0; }
+.title-deco .line { flex: 1; height: 1px; background: linear-gradient(to right, transparent, rgba(34,211,238,0.45), transparent); }
+.subtitle {
+  font-size: 13px;
+  font-family: ui-monospace, monospace;
+  color: rgba(165, 243, 252, 0.88);
+  letter-spacing: 0.42em;
+  white-space: nowrap;
+  font-weight: 700;
+  margin: 0;
+  text-shadow: 0 0 14px rgba(34, 211, 238, 0.35);
+}
 .header-right { display: flex; align-items: center; }
 .stat-inline { padding: 0 40px; border-left: 1px solid rgba(255,255,255,0.05); border-right: 1px solid rgba(255,255,255,0.05); text-align: right; }
 .stat-inline .stat-label { display: block; font-size: 10px; font-family: monospace; color: rgba(255,255,255,0.2); letter-spacing: 0.2em; margin-bottom: 4px; }

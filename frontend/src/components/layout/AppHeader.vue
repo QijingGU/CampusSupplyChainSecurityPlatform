@@ -3,7 +3,7 @@ import { useUserStore } from '@/stores/user'
 import { useRouter } from 'vue-router'
 import { Fold, Expand, User, SwitchButton, ArrowDown } from '@element-plus/icons-vue'
 
-defineProps<{ title: string; collapsed: boolean }>()
+defineProps<{ title: string; collapsed: boolean; immersive?: boolean }>()
 defineEmits<{ (e: 'toggle'): void }>()
 
 const userStore = useUserStore()
@@ -16,7 +16,7 @@ function handleLogout() {
 </script>
 
 <template>
-  <header class="app-header">
+  <header class="app-header" :class="{ 'app-header--immersive': immersive }">
     <div class="header-left">
       <div class="toggle-btn" @click="$emit('toggle')">
         <el-icon :size="22"><Fold v-if="!collapsed" /><Expand v-else /></el-icon>
@@ -116,6 +116,42 @@ function handleLogout() {
   .arrow {
     font-size: 12px;
     color: var(--text-muted);
+  }
+}
+
+.app-header--immersive {
+  background: var(--screen-chrome-bg);
+  border-bottom: 1px solid var(--screen-chrome-border);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+
+  .page-title {
+    color: var(--screen-text);
+  }
+
+  .toggle-btn {
+    color: rgba(226, 232, 240, 0.75);
+
+    &:hover {
+      background: rgba(99, 102, 241, 0.2);
+      color: var(--screen-accent-strong);
+    }
+  }
+
+  .user-avatar:hover {
+    background: rgba(99, 102, 241, 0.12);
+  }
+
+  .user-avatar .user-name {
+    color: var(--screen-text);
+  }
+
+  .user-avatar .arrow {
+    color: var(--screen-muted);
+  }
+
+  :deep(.el-avatar) {
+    background: rgba(99, 102, 241, 0.35);
+    color: var(--screen-accent-strong);
   }
 }
 </style>

@@ -21,7 +21,7 @@ def list_audit_logs(
         q = q.filter(AuditLog.action == action)
     if target_type:
         q = q.filter(AuditLog.target_type == target_type)
-    items = q.limit(200).all()
+    items = q.limit(400).all()
     return [
         {
             "id": x.id,
