@@ -6,6 +6,7 @@ import {
   listPurchases,
   approvePurchase,
   rejectPurchase,
+  forwardPurchase,
   getPurchaseTimeline,
 } from '@/api/purchase'
 import { listSuppliers } from '@/api/supplier'
@@ -271,6 +272,35 @@ async function handleReject(row: Purchase) {
   }
 }
 
+async function handleForward(row: Purchase) {
+  try {
+    const roleOptions = [
+      { label: '后勤管理员', value: 'logistics_admin' },
+      { label: '系统管理员', value: 'system_admin' },
+    ]
+    const optText = roleOptions.map((o, i) => `${i + 1}. ${o.label}`).join('\n')
+    const { value: roleInput } = await ElMessageBox.prompt(
+      `选择转发目标角色：\n${optText}\n（输入序号）`,
+      '协同转发审批',
+      { confirmButtonText: '下一步', cancelButtonText: '取消', inputValue: '1' }
+    )
+    const roleIdx = Number(roleInput || 1) - 1
+    const toRole = roleOptions[roleIdx]?.value || 'system_admin'
+    const { value: noteInput } = await ElMessageBox.prompt(
+      '转发备注（可选）',
+      '协同转发审批',
+      { confirmButtonText: '确认转发', cancelButtonText: '取消', inputPlaceholder: '如：金额较大，需上级确认' }
+    )
+    await forwardPurchase(row.id, toRole, noteInput || '')
+    ElMessage.success(`已转发给 ${roleOptions[roleIdx]?.label || toRole}`)
+    await refreshPurchasePage()
+  } catch (e: any) {
+    if (e !== 'cancel') {
+      ElMessage.error(e?.response?.data?.detail || e?.message || '转发失败')
+    }
+  }
+}
+
 async function openTimeline(row: Purchase) {
   timelineVisible.value = true
   timelineLoading.value = true
@@ -333,33 +363,57 @@ onMounted(async () => {
       <el-table :data="tableData" v-loading="loading" style="width: 100%">
         <el-table-column prop="order_no" label="单号" width="200">
           <template #default="{ row }">
-            {{ row.order_no }}
-            <el-tag v-if="isAbnormalOrder(row.order_no, getGoodsSummary(row))" type="danger" size="small">AI 异常</el-tag>
+            <div class="order-cell">
+              <span>{{ row.order_no }}</span>
+              <el-tag v-if="isAbnormalOrder(row.order_no, getGoodsSummary(row))" type="danger" size="small">AI 异常</el-tag>
+              <el-tag v-if="row.is_overdue" type="danger" size="small">⏰ 超时</el-tag>
+              <el-tag v-if="row.urgent_level === 'urgent'" type="warning" size="small">⚡ 紧急</el-tag>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column prop="applicant_name" label="申请人" width="100" />
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="applicant_name" label="申请人" width="90" />
+        <el-table-column label="类型/金额" width="130">
+          <template #default="{ row }">
+            <div class="level-cell">
+              <span v-if="row.material_type" class="mat-type">{{ row.material_type }}</span>
+              <span v-if="row.estimated_amount" class="mat-amount">¥{{ row.estimated_amount }}</span>
+            </div>
+            <div v-if="row.approval_level" class="approval-level-badge" :class="row.approval_level">
+              {{ row.approval_level === 'minor' ? '小额' : row.approval_level === 'special' ? '特殊' : '大额' }}审批
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="status" label="状态" width="110">
           <template #default="{ row }">
             <el-tag :type="(statusTypes[row.status] || 'info') as any" size="small">{{ statusLabels[row.status] || row.status }}</el-tag>
+            <div v-if="row.forwarded_to" class="forwarded-hint">→ {{ row.forwarded_to === 'system_admin' ? '管理员' : '后勤' }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="明细" min-width="200">
+        <el-table-column label="明细" min-width="160">
           <template #default="{ row }">
             <span v-for="(i, k) in row.items" :key="k">{{ i.goods_name }} {{ i.quantity }}{{ i.unit }}{{ k < row.items.length - 1 ? '；' : '' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="receiver_name" label="收货人" width="110" />
-        <el-table-column prop="destination" label="收货地点" min-width="160" />
-        <el-table-column prop="handoff_code" label="当前交接码" width="170" />
-        <el-table-column prop="created_at" label="创建时间" width="180">
-          <template #default="{ row }">{{ row.created_at ? row.created_at.slice(0, 19) : '-' }}</template>
+        <el-table-column prop="receiver_name" label="收货人" width="90" />
+        <el-table-column prop="destination" label="收货地点" min-width="130" />
+        <el-table-column label="截止时间" width="120">
+          <template #default="{ row }">
+            <span v-if="row.approval_deadline_at" :class="row.is_overdue ? 'overdue-text' : ''">
+              {{ row.approval_deadline_at.slice(0, 16).replace('T', ' ') }}
+            </span>
+            <span v-else>-</span>
+          </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column prop="created_at" label="创建时间" width="120">
+          <template #default="{ row }">{{ row.created_at ? row.created_at.slice(0, 10) : '-' }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="openTimeline(row)">闭环</el-button>
             <template v-if="row.status === 'pending'">
               <el-button type="success" size="small" @click="handleApprove(row)">通过</el-button>
               <el-button type="danger" size="small" @click="handleReject(row)">驳回</el-button>
+              <el-button size="small" @click="handleForward(row)">转发</el-button>
             </template>
           </template>
         </el-table-column>
@@ -474,4 +528,16 @@ onMounted(async () => {
 }
 .reject-section { margin-top: 16px; }
 .reject-title { font-weight: 600; margin-bottom: 8px; font-size: 13px; color: var(--text-secondary); }
+.order-cell { display: flex; flex-direction: column; gap: 3px; }
+.level-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mat-type { font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 1px 6px; border-radius: 4px; }
+.mat-amount { font-size: 12px; color: #d97706; font-weight: 600; }
+.approval-level-badge {
+  font-size: 10px; padding: 1px 5px; border-radius: 3px; display: inline-block; margin-top: 2px;
+  &.minor { background: #dcfce7; color: #16a34a; }
+  &.major { background: #fef3c7; color: #d97706; }
+  &.special { background: #fee2e2; color: #dc2626; }
+}
+.forwarded-hint { font-size: 10px; color: #6366f1; margin-top: 2px; }
+.overdue-text { color: #dc2626; font-weight: 600; }
 </style>

@@ -17,6 +17,23 @@ class Purchase(Base):
     destination = Column(String(200), default="")
     receiver_name = Column(String(50), default="")
     handoff_code = Column(String(64), default="")
+
+    # 教师申请增强字段
+    material_type = Column(String(32), default="")  # 教学/科研/办公
+    material_spec = Column(String(128), default="")
+    estimated_amount = Column(Float, default=0)
+    delivery_date = Column(DateTime(timezone=True), nullable=True)
+    attachment_names = Column(String(512), default="")
+    is_draft = Column(Integer, default=0)
+    urgent_level = Column(String(16), default="normal")  # normal / urgent
+
+    # 分级审批字段
+    approval_level = Column(String(32), default="minor")
+    approval_required_role = Column(String(32), default="logistics_admin")
+    approval_deadline_at = Column(DateTime(timezone=True), nullable=True)
+    forwarded_to = Column(String(64), default="")
+    forwarded_note = Column(String(256), default="")
+
     completed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -33,3 +50,4 @@ class PurchaseItem(Base):
     unit = Column(String(32), default="")
 
     purchase = relationship("Purchase", back_populates="items")
+

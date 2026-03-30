@@ -7,7 +7,8 @@ from ..schemas.goods import GoodsCreate, GoodsUpdate, GoodsResponse
 from .deps import get_current_user, require_roles
 
 router = APIRouter(prefix="/goods", tags=["goods"])
-_allowed = require_roles("logistics_admin", "warehouse_procurement")
+_view_allowed = require_roles("logistics_admin", "warehouse_procurement", "counselor_teacher")
+_manage_allowed = require_roles("logistics_admin", "warehouse_procurement")
 
 
 @router.get("", response_model=list[GoodsResponse])
@@ -15,7 +16,7 @@ def list_goods(
     keyword: str | None = Query(None),
     category: str | None = Query(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(_allowed),
+    current_user: User = Depends(_view_allowed),
 ):
     q = db.query(Goods)
     if keyword:
@@ -26,7 +27,7 @@ def list_goods(
 
 
 @router.post("", response_model=GoodsResponse)
-def create_goods(data: GoodsCreate, db: Session = Depends(get_db), current_user: User = Depends(_allowed)):
+def create_goods(data: GoodsCreate, db: Session = Depends(get_db), current_user: User = Depends(_manage_allowed)):
     g = Goods(**data.model_dump())
     db.add(g)
     db.commit()
@@ -35,7 +36,7 @@ def create_goods(data: GoodsCreate, db: Session = Depends(get_db), current_user:
 
 
 @router.get("/{goods_id}", response_model=GoodsResponse)
-def get_goods(goods_id: int, db: Session = Depends(get_db), current_user: User = Depends(_allowed)):
+def get_goods(goods_id: int, db: Session = Depends(get_db), current_user: User = Depends(_view_allowed)):
     g = db.query(Goods).filter(Goods.id == goods_id).first()
     if not g:
         raise HTTPException(status_code=404, detail="物资不存在")
@@ -47,7 +48,7 @@ def update_goods(
     goods_id: int,
     data: GoodsUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(_allowed),
+    current_user: User = Depends(_manage_allowed),
 ):
     g = db.query(Goods).filter(Goods.id == goods_id).first()
     if not g:
@@ -60,7 +61,7 @@ def update_goods(
 
 
 @router.delete("/{goods_id}")
-def delete_goods(goods_id: int, db: Session = Depends(get_db), current_user: User = Depends(_allowed)):
+def delete_goods(goods_id: int, db: Session = Depends(get_db), current_user: User = Depends(_manage_allowed)):
     g = db.query(Goods).filter(Goods.id == goods_id).first()
     if not g:
         raise HTTPException(status_code=404, detail="物资不存在")

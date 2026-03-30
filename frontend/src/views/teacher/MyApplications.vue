@@ -152,9 +152,25 @@ function openDetail(row: Purchase) {
           <template #default="{ row }">
             {{ row.order_no }}
             <el-tag v-if="isAbnormalOrder(row.order_no, row.goods_summary)" type="danger" size="small">AI 异常</el-tag>
+            <el-tag v-if="row.urgent_level === 'urgent'" type="warning" size="small">⚡紧急</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="goods_summary" label="物资摘要" />
+        <el-table-column label="物资/类型" min-width="160">
+          <template #default="{ row }">
+            <div>{{ row.goods_summary || '-' }}</div>
+            <div v-if="row.material_type" class="row-sub">{{ row.material_type }}{{ row.material_spec ? ' · ' + row.material_spec : '' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="审批" width="130">
+          <template #default="{ row }">
+            <div v-if="row.approval_level" class="approval-badge" :class="row.approval_level">
+              {{ row.approval_level === 'minor' ? '小额' : row.approval_level === 'special' ? '特殊' : '大额' }}审批
+            </div>
+            <div v-if="row.approval_deadline_at && row.status === 'pending'" class="deadline-hint" :class="{ overdue: row.is_overdue }">
+              截止：{{ row.approval_deadline_at.slice(0, 16).replace('T', ' ') }}
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column prop="receiver_name" label="收货人" width="100" />
         <el-table-column prop="destination" label="收货地点" min-width="140" />
         <el-table-column prop="status" label="状态" width="100">
@@ -246,4 +262,15 @@ function openDetail(row: Purchase) {
 }
 
 .table-card { padding: 24px; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 16px; box-shadow: var(--shadow-card); }
+.row-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.approval-badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 4px; display: inline-block; margin-bottom: 2px;
+  &.minor { background: #dcfce7; color: #16a34a; }
+  &.major { background: #fef3c7; color: #d97706; }
+  &.special { background: #fee2e2; color: #dc2626; }
+}
+.deadline-hint {
+  font-size: 10px; color: #64748b;
+  &.overdue { color: #dc2626; font-weight: 600; }
+}
 </style>
