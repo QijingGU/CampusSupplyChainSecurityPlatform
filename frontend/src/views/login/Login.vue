@@ -44,7 +44,7 @@ const features = [
 function getDefaultRedirect(role: RoleType): string {
   switch (role) {
     case 'system_admin': return '/user'
-    case 'counselor_teacher': return '/ai/chat'
+    case 'counselor_teacher': return '/purchase/apply'
     case 'campus_supplier': return '/supplier/orders'
     default: return '/dashboard'
   }

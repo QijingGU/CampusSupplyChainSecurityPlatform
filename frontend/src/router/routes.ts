@@ -57,7 +57,7 @@ export const routes: RouteRecordRaw[] = [
         path: 'purchase/apply',
         name: 'PurchaseApply',
         component: () => import('@/views/purchase/PurchaseApply.vue'),
-        meta: { title: '采购申请', icon: 'Edit', hideInMenu: true, roles: ['counselor_teacher'] },
+        meta: { title: '采购申请', icon: 'Edit', roles: ['counselor_teacher'] },
       },
       // 仓储 - 后勤管理员 + 仓储采购员
       {

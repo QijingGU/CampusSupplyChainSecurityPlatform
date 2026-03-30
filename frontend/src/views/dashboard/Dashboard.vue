@@ -17,6 +17,7 @@ import {
   Monitor,
   DataAnalysis,
   Star,
+  Edit,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import type { RoleType } from '@/types/role'
@@ -42,6 +43,7 @@ const iconMap: Record<string, object> = {
   OfficeBuilding,
   Connection,
   ChatDotRound,
+  Edit,
 }
 
 // 与全局设计系统、侧栏主色一致（靛蓝 + 青绿）
@@ -111,8 +113,9 @@ const shortcuts = computed(() => {
   ]
   if (userRole.value === 'counselor_teacher') {
     return [
-      { icon: ChatDotRound, label: 'AI 申请', path: '/ai/chat' },
+      { icon: Edit, label: '采购申请', path: '/purchase/apply' },
       { icon: Document, label: '我的申请', path: '/my-applications' },
+      { icon: ChatDotRound, label: 'AI 申请', path: '/ai/chat' },
       { icon: Connection, label: '溯源', path: '/trace' },
       { icon: Star, label: '服务评价', path: '/teacher/service-evaluation' },
     ]
