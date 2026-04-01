@@ -90,3 +90,7 @@ security-center workflows change.
     consistent with the routed security-center entry points.
 - Next step: prepare a reviewable commit/push on `security-center/feature-ids`
   and leave the branch ready for human review.
+- Delivery:
+  - committed the current IDS refactor slice as
+    `feat: normalize ids incident workflow`,
+  - pushed `security-center/feature-ids` to GitHub for review.

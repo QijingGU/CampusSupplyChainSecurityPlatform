@@ -109,7 +109,7 @@ real IDS outputs.
 - [X] T025 [P] Clean up stale IDS field names and transitional comments across backend/app/api/ids.py, backend/app/services/ids_engine.py, and frontend/src/api/ids.ts
 - [X] T026 [P] Review security-center routing and navigation consistency in frontend/src/router/routes.ts and frontend/src/views/security/SecurityCenterLayout.vue
 - [X] T027 Run the validation flow in specs/001-ids-refactor/quickstart.md and capture results in docs/ids-changelog.md
-- [ ] T028 Prepare a reviewable commit and push current work to origin security-center/feature-ids
+- [X] T028 Prepare a reviewable commit and push current work to origin security-center/feature-ids
 
 ---
 
