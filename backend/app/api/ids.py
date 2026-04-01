@@ -13,6 +13,7 @@ from ..api.deps import require_roles
 from ..config import settings
 from ..database import get_db
 from ..models.ids_event import IDSEvent
+from ..models.ids_source import IDSSource, IDSSourceSyncAttempt
 from ..services.ids_ai_analysis import is_llm_available, run_ai_analysis_sync
 from ..services.ids_engine import block_ip_windows, unblock_ip_windows
 from ..services.ids_ingestion import (
@@ -25,6 +26,30 @@ from ..services.ids_ingestion import (
     apply_source_metadata,
     build_correlation_key,
     build_event_fingerprint,
+)
+from ..services.ids_source_ops import (
+    HEALTH_DISABLED,
+    HEALTH_FAILING,
+    HEALTH_HEALTHY,
+    HEALTH_NEVER,
+    OPERATIONAL_STATUSES,
+    SOURCE_DEMO_TEST,
+    SOURCE_STATUS_DISABLED,
+    SOURCE_STATUS_DRAFT,
+    SOURCE_STATUS_FAILING,
+    SYNC_MODE_NOT_APPLICABLE,
+    SYNC_MODES,
+    SYNC_STATUS_FAILED,
+    SYNC_STATUS_NEVER,
+    SYNC_STATUS_SKIPPED,
+    SYNC_STATUS_SUCCESS,
+    TRUST_CLASSIFICATIONS,
+    build_source_warning,
+    derive_source_health_state,
+    is_trusted_production_source,
+    list_recent_source_activity,
+    list_recent_sync_attempts,
+    normalize_source_key,
 )
 
 router = APIRouter(prefix="/ids", tags=["ids"])
@@ -72,6 +97,22 @@ class IngestEventRequest(BaseModel):
     correlation_key: str = ""
     evidence_summary: str = ""
     raw_evidence: IngestRawEvidence | None = None
+
+
+class SourceRegistryRequest(BaseModel):
+    source_key: str
+    display_name: str
+    trust_classification: str
+    detector_family: str
+    operational_status: str = "enabled"
+    freshness_target_hours: int = Field(..., ge=1, le=720)
+    sync_mode: str = "manual"
+    provenance_note: str = ""
+
+
+class SourceSyncRequest(BaseModel):
+    triggered_by: str
+    reason: str = ""
 
 
 @router.get("/events")
@@ -182,13 +223,155 @@ def ids_stats_trend(
     return {"dates": dates, "counts": counts}
 
 
+@router.get("/sources")
+def list_ids_sources(
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    rows = (
+        db.query(IDSSource)
+        .order_by(IDSSource.updated_at.desc(), IDSSource.id.desc())
+        .all()
+    )
+    activity_map = list_recent_source_activity(db, [row.source_key or "" for row in rows])
+    attempts_map = list_recent_sync_attempts(db, [int(row.id) for row in rows])
+    items = [
+        _serialize_ids_source(row, activity=activity_map.get(row.source_key or ""), attempts=attempts_map.get(int(row.id), []))
+        for row in rows
+    ]
+    return {"total": len(items), "items": items, "summary": _summarize_sources(items)}
+
+
+@router.post("/sources")
+def create_ids_source(
+    req: SourceRegistryRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    payload = _validate_source_registry_request(req, db=db)
+    source = IDSSource(
+        source_key=payload["source_key"],
+        display_name=payload["display_name"],
+        trust_classification=payload["trust_classification"],
+        detector_family=payload["detector_family"],
+        operational_status=payload["operational_status"],
+        freshness_target_hours=payload["freshness_target_hours"],
+        sync_mode=payload["sync_mode"],
+        provenance_note=payload["provenance_note"],
+        last_sync_status=SYNC_STATUS_NEVER,
+        last_sync_detail="Awaiting first sync.",
+    )
+    db.add(source)
+    db.commit()
+    db.refresh(source)
+    return _serialize_ids_source(source, activity={}, attempts=[])
+
+
+@router.put("/sources/{source_id}")
+def update_ids_source(
+    source_id: int,
+    req: SourceRegistryRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    source = _get_source_or_404(db, source_id)
+    payload = _validate_source_registry_request(req, db=db, source_id=source_id)
+    source.source_key = payload["source_key"]
+    source.display_name = payload["display_name"]
+    source.trust_classification = payload["trust_classification"]
+    source.detector_family = payload["detector_family"]
+    source.operational_status = payload["operational_status"]
+    source.freshness_target_hours = payload["freshness_target_hours"]
+    source.sync_mode = payload["sync_mode"]
+    source.provenance_note = payload["provenance_note"]
+    db.commit()
+    db.refresh(source)
+    activity_map = list_recent_source_activity(db, [source.source_key or ""])
+    attempts_map = list_recent_sync_attempts(db, [int(source.id)])
+    return _serialize_ids_source(source, activity=activity_map.get(source.source_key or ""), attempts=attempts_map.get(int(source.id), []))
+
+
+@router.post("/sources/{source_id}/sync")
+def trigger_ids_source_sync(
+    source_id: int,
+    req: SourceSyncRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    source = _get_source_or_404(db, source_id)
+    triggered_by = (req.triggered_by or "").strip()[:64]
+    reason = (req.reason or "").strip()[:500]
+    if not triggered_by:
+        raise HTTPException(status_code=400, detail="triggered_by is required")
+
+    started_at = datetime.utcnow()
+    result_status = SYNC_STATUS_SUCCESS
+    detail = reason or "Metadata refresh completed."
+
+    if source.operational_status == SOURCE_STATUS_DISABLED:
+        result_status = SYNC_STATUS_SKIPPED
+        detail = reason or "Skipped because the source is disabled."
+    elif source.operational_status == SOURCE_STATUS_DRAFT:
+        result_status = SYNC_STATUS_SKIPPED
+        detail = reason or "Skipped because the source is still in draft state."
+    elif source.sync_mode == SYNC_MODE_NOT_APPLICABLE:
+        result_status = SYNC_STATUS_SKIPPED
+        detail = reason or "Skipped because sync is not applicable for this source."
+    elif source.operational_status == SOURCE_STATUS_FAILING:
+        result_status = SYNC_STATUS_FAILED
+        detail = reason or "Sync failed because the source is currently marked failing."
+
+    if result_status == SYNC_STATUS_SUCCESS:
+        source.last_synced_at = started_at
+        source.last_sync_status = SYNC_STATUS_SUCCESS
+        source.last_sync_detail = detail
+    else:
+        if not source.last_sync_status:
+            source.last_sync_status = SYNC_STATUS_NEVER
+        source.last_sync_status = result_status
+        source.last_sync_detail = detail
+
+    health_state = derive_source_health_state(source, now=started_at)
+    attempt = IDSSourceSyncAttempt(
+        source_id=source.id,
+        started_at=started_at,
+        finished_at=started_at,
+        result_status=result_status,
+        detail=detail,
+        freshness_after_sync=health_state,
+        triggered_by=triggered_by,
+    )
+    db.add(attempt)
+    db.commit()
+    db.refresh(source)
+    db.refresh(attempt)
+
+    activity_map = list_recent_source_activity(db, [source.source_key or ""])
+    attempts_map = list_recent_sync_attempts(db, [int(source.id)])
+    serialized = _serialize_ids_source(
+        source,
+        activity=activity_map.get(source.source_key or ""),
+        attempts=attempts_map.get(int(source.id), []),
+    )
+    return {
+        "source_id": source.id,
+        "sync_attempt_id": attempt.id,
+        "result_status": attempt.result_status,
+        "health_state": serialized["health_state"],
+        "last_synced_at": serialized["last_synced_at"],
+        "detail": attempt.detail or "",
+        "source": serialized,
+    }
+
+
 @router.post("/events/ingest")
 def ingest_ids_event(
     req: IngestEventRequest,
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    # Keep external, demo, and transitional signals on one normalized contract.
+    # Keep normalized event ingestion aligned with trusted-source provenance
+    # without introducing registry-only demo/test source classes into events.
     allowed_origins = {REAL_EVENT_ORIGIN, DEMO_EVENT_ORIGIN, TEST_EVENT_ORIGIN}
     allowed_sources = {
         SOURCE_EXTERNAL_MATURE,
@@ -907,6 +1090,125 @@ def _attack_type_label(attack_type: str | None) -> str:
 def _event_origin_label(origin: str | None) -> str:
     labels = {"real": "Real", "demo": "Demo", "test": "Test"}
     return labels.get((origin or "").strip(), origin or REAL_EVENT_ORIGIN)
+
+
+def _get_source_or_404(db: Session, source_id: int) -> IDSSource:
+    source = db.query(IDSSource).filter(IDSSource.id == source_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+    return source
+
+
+def _validate_source_registry_request(
+    req: SourceRegistryRequest,
+    *,
+    db: Session,
+    source_id: int | None = None,
+) -> dict:
+    source_key = normalize_source_key(req.source_key)
+    display_name = (req.display_name or "").strip()[:128]
+    trust_classification = (req.trust_classification or "").strip()
+    detector_family = (req.detector_family or "").strip()[:32]
+    operational_status = (req.operational_status or "").strip()
+    sync_mode = (req.sync_mode or "").strip()
+    provenance_note = (req.provenance_note or "").strip()[:2000]
+
+    if not source_key:
+        raise HTTPException(status_code=400, detail="source_key is required")
+    if not display_name:
+        raise HTTPException(status_code=400, detail="display_name is required")
+    if trust_classification not in TRUST_CLASSIFICATIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid trust_classification: {trust_classification}")
+    if not detector_family:
+        raise HTTPException(status_code=400, detail="detector_family is required")
+    if operational_status not in OPERATIONAL_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid operational_status: {operational_status}")
+    if sync_mode not in SYNC_MODES:
+        raise HTTPException(status_code=400, detail=f"Invalid sync_mode: {sync_mode}")
+    if trust_classification == SOURCE_DEMO_TEST and sync_mode != SYNC_MODE_NOT_APPLICABLE:
+        raise HTTPException(status_code=400, detail="demo_test sources must use sync_mode=not_applicable")
+
+    existing = db.query(IDSSource).filter(IDSSource.source_key == source_key).first()
+    if existing and existing.id != source_id:
+        raise HTTPException(status_code=400, detail=f"source_key already exists: {source_key}")
+
+    return {
+        "source_key": source_key,
+        "display_name": display_name,
+        "trust_classification": trust_classification,
+        "detector_family": detector_family,
+        "operational_status": operational_status,
+        "freshness_target_hours": int(req.freshness_target_hours),
+        "sync_mode": sync_mode,
+        "provenance_note": provenance_note,
+    }
+
+
+def _format_dt(value: datetime | None) -> str | None:
+    return value.strftime("%Y-%m-%d %H:%M:%S") if value else None
+
+
+def _serialize_source_sync_attempt(attempt: IDSSourceSyncAttempt) -> dict:
+    return {
+        "id": attempt.id,
+        "source_id": attempt.source_id,
+        "started_at": _format_dt(attempt.started_at),
+        "finished_at": _format_dt(attempt.finished_at),
+        "result_status": attempt.result_status or "",
+        "detail": (attempt.detail or "")[:1000],
+        "freshness_after_sync": attempt.freshness_after_sync or "",
+        "triggered_by": attempt.triggered_by or "",
+    }
+
+
+def _serialize_ids_source(
+    source: IDSSource,
+    *,
+    activity: dict | None = None,
+    attempts: list[IDSSourceSyncAttempt] | None = None,
+) -> dict:
+    activity = activity or {}
+    attempts = attempts or []
+    health_state = derive_source_health_state(source)
+    recent_count = int(activity.get("recent_incident_count") or 0)
+    recent_last_seen = activity.get("recent_incident_last_seen_at")
+    return {
+        "id": source.id,
+        "source_key": source.source_key or "",
+        "display_name": source.display_name or "",
+        "trust_classification": source.trust_classification or "",
+        "detector_family": source.detector_family or "",
+        "operational_status": source.operational_status or "",
+        "freshness_target_hours": int(source.freshness_target_hours or 0),
+        "sync_mode": source.sync_mode or "",
+        "last_synced_at": _format_dt(source.last_synced_at),
+        "last_sync_status": source.last_sync_status or "",
+        "last_sync_detail": (source.last_sync_detail or "")[:1000],
+        "health_state": health_state,
+        "visible_warning": build_source_warning(source, health_state=health_state),
+        "recent_incident_count": recent_count,
+        "recent_incident_last_seen_at": _format_dt(recent_last_seen if isinstance(recent_last_seen, datetime) else None),
+        "provenance_note": (source.provenance_note or "")[:2000],
+        "is_production_trusted": is_trusted_production_source(source),
+        "created_at": _format_dt(source.created_at),
+        "updated_at": _format_dt(source.updated_at),
+        "latest_sync_attempt": _serialize_source_sync_attempt(attempts[0]) if attempts else None,
+        "recent_sync_attempts": [_serialize_source_sync_attempt(attempt) for attempt in attempts],
+    }
+
+
+def _summarize_sources(items: list[dict]) -> dict:
+    healthy_count = sum(1 for item in items if item.get("health_state") == HEALTH_HEALTHY)
+    degraded_count = sum(1 for item in items if item.get("health_state") != HEALTH_HEALTHY)
+    trusted_count = sum(1 for item in items if item.get("is_production_trusted"))
+    demo_test_count = sum(1 for item in items if not item.get("is_production_trusted"))
+    return {
+        "total": len(items),
+        "healthy_count": healthy_count,
+        "degraded_count": degraded_count,
+        "trusted_count": trusted_count,
+        "demo_test_count": demo_test_count,
+    }
 
 
 def _serialize_ids_event(row: IDSEvent) -> dict:

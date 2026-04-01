@@ -79,6 +79,75 @@ export interface IDSTrendResponse {
   counts: number[]
 }
 
+// Source operations payloads for the IDS security-center registry panel.
+export interface IDSSourceSyncAttemptItem {
+  id: number
+  source_id: number
+  started_at: string | null
+  finished_at: string | null
+  result_status: string
+  detail: string
+  freshness_after_sync: string
+  triggered_by: string
+}
+
+export interface IDSSourceItem {
+  id: number
+  source_key: string
+  display_name: string
+  trust_classification: string
+  detector_family: string
+  operational_status: string
+  freshness_target_hours: number
+  sync_mode: string
+  last_synced_at: string | null
+  last_sync_status: string
+  last_sync_detail: string
+  health_state: string
+  visible_warning: string
+  recent_incident_count: number
+  recent_incident_last_seen_at: string | null
+  provenance_note: string
+  is_production_trusted: boolean
+  created_at: string | null
+  updated_at: string | null
+  latest_sync_attempt?: IDSSourceSyncAttemptItem | null
+  recent_sync_attempts: IDSSourceSyncAttemptItem[]
+}
+
+export interface IDSSourceListResponse {
+  total: number
+  items: IDSSourceItem[]
+  summary: {
+    total: number
+    healthy_count: number
+    degraded_count: number
+    trusted_count: number
+    demo_test_count: number
+  }
+}
+
+export interface IDSSourceRegistryPayload {
+  source_key: string
+  display_name: string
+  trust_classification: string
+  detector_family: string
+  operational_status: string
+  freshness_target_hours: number
+  sync_mode: string
+  provenance_note?: string
+}
+
+export interface IDSSourceSyncResponse {
+  source_id: number
+  sync_attempt_id: number
+  result_status: string
+  health_state: string
+  last_synced_at: string | null
+  detail: string
+  source: IDSSourceItem
+}
+
 export function getIDSTrend(
   days?: number,
   params?: { event_origin?: string; source_classification?: string },
@@ -86,6 +155,22 @@ export function getIDSTrend(
   return request.get<IDSTrendResponse>('/ids/stats/trend', {
     params: { days: days ?? 7, ...params },
   })
+}
+
+export function listIDSSources() {
+  return request.get<IDSSourceListResponse>('/ids/sources')
+}
+
+export function createIDSSource(data: IDSSourceRegistryPayload) {
+  return request.post<IDSSourceItem>('/ids/sources', data)
+}
+
+export function updateIDSSource(sourceId: number, data: IDSSourceRegistryPayload) {
+  return request.put<IDSSourceItem>(`/ids/sources/${sourceId}`, data)
+}
+
+export function syncIDSSource(sourceId: number, data: { triggered_by: string; reason?: string }) {
+  return request.post<IDSSourceSyncResponse>(`/ids/sources/${sourceId}/sync`, data)
 }
 
 export function archiveIDSEvent(eventId: number) {

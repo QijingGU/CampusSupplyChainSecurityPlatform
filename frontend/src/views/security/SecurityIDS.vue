@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch, onBeforeUnmount } from 'vue'
+import { computed, reactive, ref, onMounted, watch, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { DeleteFilled } from '@element-plus/icons-vue'
@@ -20,8 +20,14 @@ import {
   seedIDSDemoPhase2,
   resetIDSDemoEvents,
   getIDSPhase1AggregateReport,
+  listIDSSources,
+  createIDSSource,
+  updateIDSSource,
+  syncIDSSource,
 } from '@/api/ids'
-import type { IDSEventItem, IDSStatsResponse } from '@/api/ids'
+import type { IDSEventItem, IDSStatsResponse, IDSSourceItem, IDSSourceListResponse, IDSSourceRegistryPayload } from '@/api/ids'
+
+type SourceFormState = IDSSourceRegistryPayload
 
 const loading = ref(false)
 const trendDays = ref(7)
@@ -40,6 +46,19 @@ const minScoreFilter = ref<number | undefined>(undefined)
 const pageSize = ref(20)
 const pageOffset = ref(0)
 const selectedIds = ref<number[]>([])
+const sourceLoading = ref(false)
+const sourceSaving = ref(false)
+const sourceDialogVisible = ref(false)
+const sourceSyncingId = ref<number | null>(null)
+const editingSourceId = ref<number | null>(null)
+const sourceRows = ref<IDSSourceItem[]>([])
+const sourceSummary = ref<IDSSourceListResponse['summary']>({
+  total: 0,
+  healthy_count: 0,
+  degraded_count: 0,
+  trusted_count: 0,
+  demo_test_count: 0,
+})
 const detailVisible = ref(false)
 const currentRow = ref<IDSEventItem | null>(null)
 const simulatingAttack = ref(false)
@@ -83,6 +102,21 @@ let idsHudClockTimer: ReturnType<typeof setInterval> | null = null
 function tickIdsHudClock() {
   idsHudClock.value = new Date().toLocaleString('zh-CN', { hour12: false })
 }
+
+function createSourceFormDefaults(): SourceFormState {
+  return {
+    source_key: '',
+    display_name: '',
+    trust_classification: 'external_mature',
+    detector_family: 'network',
+    operational_status: 'enabled',
+    freshness_target_hours: 24,
+    sync_mode: 'manual',
+    provenance_note: '',
+  }
+}
+
+const sourceForm = reactive<SourceFormState>(createSourceFormDefaults())
 
 function buildStatsFilters() {
   return {
@@ -253,6 +287,33 @@ async function fetchData() {
   }
 }
 
+async function fetchSources() {
+  sourceLoading.value = true
+  try {
+    const res: any = await listIDSSources()
+    const data = res?.data ?? res
+    sourceRows.value = data?.items ?? []
+    sourceSummary.value = data?.summary ?? {
+      total: 0,
+      healthy_count: 0,
+      degraded_count: 0,
+      trusted_count: 0,
+      demo_test_count: 0,
+    }
+  } catch {
+    sourceRows.value = []
+    sourceSummary.value = {
+      total: 0,
+      healthy_count: 0,
+      degraded_count: 0,
+      trusted_count: 0,
+      demo_test_count: 0,
+    }
+  } finally {
+    sourceLoading.value = false
+  }
+}
+
 function parseDateTime(v: string | null | undefined): Date | null {
   if (!v) return null
   const dt = new Date(v.replace(' ', 'T'))
@@ -317,6 +378,142 @@ function responseResultTagType(value: string | null | undefined): 'success' | 'd
   if (value === 'success') return 'success'
   if (value === 'failed') return 'danger'
   return 'info'
+}
+
+function sourceTrustClassificationLabel(value: string | null | undefined): string {
+  if (value === 'external_mature') return 'Mature External'
+  if (value === 'custom_project') return 'Custom Project'
+  if (value === 'transitional_local') return 'Transitional Local'
+  if (value === 'demo_test') return 'Demo / Test'
+  return value?.trim() || '-'
+}
+
+function sourceTrustClassificationTagType(value: string | null | undefined): 'success' | 'warning' | 'info' | 'danger' {
+  if (value === 'external_mature') return 'success'
+  if (value === 'custom_project') return 'warning'
+  if (value === 'demo_test') return 'danger'
+  return 'info'
+}
+
+function sourceHealthLabel(value: string | null | undefined): string {
+  if (value === 'healthy') return 'Healthy'
+  if (value === 'stale') return 'Stale'
+  if (value === 'disabled') return 'Disabled'
+  if (value === 'failing') return 'Failing'
+  if (value === 'never_synced') return 'Never Synced'
+  return value?.trim() || '-'
+}
+
+function sourceHealthTagType(value: string | null | undefined): 'success' | 'warning' | 'info' | 'danger' {
+  if (value === 'healthy') return 'success'
+  if (value === 'stale') return 'warning'
+  if (value === 'failing') return 'danger'
+  return 'info'
+}
+
+function sourceOperationalStatusLabel(value: string | null | undefined): string {
+  if (value === 'enabled') return 'Enabled'
+  if (value === 'disabled') return 'Disabled'
+  if (value === 'failing') return 'Failing'
+  if (value === 'draft') return 'Draft'
+  return value?.trim() || '-'
+}
+
+function sourceSyncModeLabel(value: string | null | undefined): string {
+  if (value === 'manual') return 'Manual'
+  if (value === 'scheduled') return 'Scheduled'
+  if (value === 'not_applicable') return 'N/A'
+  return value?.trim() || '-'
+}
+
+function sourceSyncResultTagType(value: string | null | undefined): 'success' | 'warning' | 'info' | 'danger' {
+  if (value === 'success') return 'success'
+  if (value === 'failed') return 'danger'
+  if (value === 'skipped') return 'warning'
+  return 'info'
+}
+
+function resetSourceForm() {
+  Object.assign(sourceForm, createSourceFormDefaults())
+  editingSourceId.value = null
+}
+
+function applySourceTrustDefaults(value: string) {
+  if (value === 'demo_test') {
+    sourceForm.sync_mode = 'not_applicable'
+    if (sourceForm.operational_status === 'enabled') {
+      sourceForm.operational_status = 'draft'
+    }
+  } else if (sourceForm.sync_mode === 'not_applicable') {
+    sourceForm.sync_mode = 'manual'
+  }
+}
+
+function openSourceCreateDialog() {
+  resetSourceForm()
+  sourceDialogVisible.value = true
+}
+
+function openSourceEditDialog(row: IDSSourceItem) {
+  editingSourceId.value = row.id
+  Object.assign(sourceForm, {
+    source_key: row.source_key,
+    display_name: row.display_name,
+    trust_classification: row.trust_classification,
+    detector_family: row.detector_family,
+    operational_status: row.operational_status,
+    freshness_target_hours: row.freshness_target_hours,
+    sync_mode: row.sync_mode,
+    provenance_note: row.provenance_note || '',
+  })
+  sourceDialogVisible.value = true
+}
+
+async function saveSource() {
+  sourceSaving.value = true
+  try {
+    const payload: IDSSourceRegistryPayload = {
+      source_key: sourceForm.source_key.trim(),
+      display_name: sourceForm.display_name.trim(),
+      trust_classification: sourceForm.trust_classification,
+      detector_family: sourceForm.detector_family.trim(),
+      operational_status: sourceForm.operational_status,
+      freshness_target_hours: Number(sourceForm.freshness_target_hours || 0),
+      sync_mode: sourceForm.sync_mode,
+      provenance_note: sourceForm.provenance_note?.trim() || '',
+    }
+    if (editingSourceId.value) {
+      await updateIDSSource(editingSourceId.value, payload)
+      ElMessage.success('Source updated')
+    } else {
+      await createIDSSource(payload)
+      ElMessage.success('Source created')
+    }
+    sourceDialogVisible.value = false
+    resetSourceForm()
+    await fetchSources()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || 'Source save failed')
+  } finally {
+    sourceSaving.value = false
+  }
+}
+
+async function runSourceSync(row: IDSSourceItem) {
+  sourceSyncingId.value = row.id
+  try {
+    const res: any = await syncIDSSource(row.id, {
+      triggered_by: 'system_admin',
+      reason: `manual sync from security center (${row.source_key})`,
+    })
+    const data = res?.data ?? res
+    ElMessage.success(`Sync ${data?.result_status || 'completed'} for ${row.display_name}`)
+    await fetchSources()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || 'Source sync failed')
+  } finally {
+    sourceSyncingId.value = null
+  }
 }
 
 const timelineSummaryNodes = computed(() => {
@@ -1013,6 +1210,7 @@ onMounted(() => {
   tickIdsHudClock()
   idsHudClockTimer = setInterval(tickIdsHudClock, 1000)
   refreshIdsTableMaxHeight()
+  fetchSources()
   fetchStats()
   fetchTrend()
   fetchData()
@@ -1123,6 +1321,106 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
             {{ sourceClassificationLabel(sourceClassificationFilter) }}
           </el-tag>
         </div>
+      </div>
+
+      <div class="source-ops-card sec-card">
+        <div class="source-ops-card__header">
+          <div>
+            <div class="chart-title">Trusted Source Operations</div>
+            <div class="source-ops-card__subtitle">
+              Review source health, separate demo/test records, and keep sync activity traceable.
+            </div>
+          </div>
+          <el-button type="primary" @click="openSourceCreateDialog">Add Source</el-button>
+        </div>
+
+        <div class="source-summary-grid">
+          <div class="source-summary-tile">
+            <span class="source-summary-tile__value">{{ sourceSummary.total }}</span>
+            <span class="source-summary-tile__label">Registry Total</span>
+          </div>
+          <div class="source-summary-tile source-summary-tile--good">
+            <span class="source-summary-tile__value">{{ sourceSummary.healthy_count }}</span>
+            <span class="source-summary-tile__label">Healthy</span>
+          </div>
+          <div class="source-summary-tile source-summary-tile--warn">
+            <span class="source-summary-tile__value">{{ sourceSummary.degraded_count }}</span>
+            <span class="source-summary-tile__label">Needs Review</span>
+          </div>
+          <div class="source-summary-tile">
+            <span class="source-summary-tile__value">{{ sourceSummary.trusted_count }}</span>
+            <span class="source-summary-tile__label">Trusted Prod</span>
+          </div>
+          <div class="source-summary-tile source-summary-tile--demo">
+            <span class="source-summary-tile__value">{{ sourceSummary.demo_test_count }}</span>
+            <span class="source-summary-tile__label">Demo/Test</span>
+          </div>
+        </div>
+
+        <el-table :data="sourceRows" v-loading="sourceLoading" class="sec-table source-ops-table" style="width: 100%">
+          <el-table-column label="Source" min-width="200">
+            <template #default="{ row }">
+              <div class="cell-stack">
+                <span class="cell-ellipsis">{{ row.display_name }}</span>
+                <span class="cell-sub cell-mono">{{ row.source_key }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="Trust" width="168">
+            <template #default="{ row }">
+              <div class="cell-stack">
+                <el-tag size="small" :type="sourceTrustClassificationTagType(row.trust_classification)">
+                  {{ sourceTrustClassificationLabel(row.trust_classification) }}
+                </el-tag>
+                <span class="cell-sub">{{ sourceOperationalStatusLabel(row.operational_status) }} / {{ sourceSyncModeLabel(row.sync_mode) }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="Health" width="170">
+            <template #default="{ row }">
+              <div class="cell-stack">
+                <el-tag size="small" :type="sourceHealthTagType(row.health_state)">
+                  {{ sourceHealthLabel(row.health_state) }}
+                </el-tag>
+                <span class="cell-sub" :title="row.visible_warning || '-'">{{ row.visible_warning || 'No active warning' }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="Recent Activity" width="144" align="center">
+            <template #default="{ row }">
+              <div class="cell-stack source-ops-table__metric">
+                <span>{{ row.recent_incident_count }}</span>
+                <span class="cell-sub">{{ fmtTableDateTime(row.recent_incident_last_seen_at) }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="Latest Sync" min-width="240">
+            <template #default="{ row }">
+              <div class="cell-stack">
+                <div class="source-sync-line">
+                  <el-tag size="small" :type="sourceSyncResultTagType(row.latest_sync_attempt?.result_status || row.last_sync_status)">
+                    {{ row.latest_sync_attempt?.result_status || row.last_sync_status || 'none' }}
+                  </el-tag>
+                  <span class="cell-sub">{{ fmtTableDateTime(row.last_synced_at || row.latest_sync_attempt?.started_at) }}</span>
+                </div>
+                <span class="cell-sub" :title="row.latest_sync_attempt?.detail || row.last_sync_detail || '-'">
+                  {{ row.latest_sync_attempt?.detail || row.last_sync_detail || 'Awaiting first sync' }}
+                </span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="Actions" width="176" align="center">
+            <template #default="{ row }">
+              <div class="ids-ops ids-ops--row">
+                <button type="button" class="ids-act ids-act--primary" @click="openSourceEditDialog(row)">Edit</button>
+                <span class="ids-ops__sep" aria-hidden="true">|</span>
+                <button type="button" class="ids-act" :disabled="sourceSyncingId === row.id" @click="runSourceSync(row)">
+                  {{ sourceSyncingId === row.id ? 'Syncing...' : 'Run Sync' }}
+                </button>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
 
       <div class="filter-bar">
@@ -1342,6 +1640,63 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
         </div>
       </div>
     </main>
+
+    <el-dialog
+      v-model="sourceDialogVisible"
+      :title="editingSourceId ? 'Edit Source' : 'Add Source'"
+      width="640px"
+      destroy-on-close
+    >
+      <el-form label-width="160px" class="source-form-grid">
+        <el-form-item label="Source Key">
+          <el-input v-model="sourceForm.source_key" placeholder="suricata-web-prod" />
+        </el-form-item>
+        <el-form-item label="Display Name">
+          <el-input v-model="sourceForm.display_name" placeholder="Suricata Web Rules" />
+        </el-form-item>
+        <el-form-item label="Trust Classification">
+          <el-select v-model="sourceForm.trust_classification" class="sec-select" @change="applySourceTrustDefaults">
+            <el-option label="Mature External" value="external_mature" />
+            <el-option label="Custom Project" value="custom_project" />
+            <el-option label="Transitional Local" value="transitional_local" />
+            <el-option label="Demo / Test" value="demo_test" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Detector Family">
+          <el-select v-model="sourceForm.detector_family" class="sec-select">
+            <el-option label="Network" value="network" />
+            <el-option label="Web" value="web" />
+            <el-option label="File" value="file" />
+            <el-option label="Log" value="log" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Operational Status">
+          <el-select v-model="sourceForm.operational_status" class="sec-select">
+            <el-option label="Enabled" value="enabled" />
+            <el-option label="Disabled" value="disabled" />
+            <el-option label="Failing" value="failing" />
+            <el-option label="Draft" value="draft" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Freshness Target (hours)">
+          <el-input-number v-model="sourceForm.freshness_target_hours" :min="1" :max="720" />
+        </el-form-item>
+        <el-form-item label="Sync Mode">
+          <el-select v-model="sourceForm.sync_mode" class="sec-select">
+            <el-option label="Manual" value="manual" />
+            <el-option label="Scheduled" value="scheduled" />
+            <el-option label="N/A" value="not_applicable" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Provenance Note">
+          <el-input v-model="sourceForm.provenance_note" type="textarea" :rows="4" placeholder="Why this source is trusted or why it stays demo/test only." />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="sourceDialogVisible = false">Cancel</el-button>
+        <el-button type="primary" :loading="sourceSaving" @click="saveSource">Save</el-button>
+      </template>
+    </el-dialog>
 
     <el-drawer v-model="detailVisible" title="事件详情" size="480" class="sec-drawer">
       <template v-if="currentRow">
@@ -2263,6 +2618,86 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
 
 .ids-act--muted:hover:not(:disabled) {
   color: #cbd5e1;
+}
+
+.source-ops-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.source-ops-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.source-ops-card__subtitle {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.source-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.source-summary-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid rgba(34, 211, 238, 0.12);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.source-summary-tile--good {
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.source-summary-tile--warn {
+  border-color: rgba(245, 158, 11, 0.22);
+}
+
+.source-summary-tile--demo {
+  border-color: rgba(248, 113, 113, 0.18);
+}
+
+.source-summary-tile__value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.source-summary-tile__label {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.52);
+}
+
+.source-ops-table__metric {
+  align-items: center;
+}
+
+.source-sync-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.source-form-grid :deep(.el-form-item) {
+  margin-bottom: 18px;
+}
+
+.source-form-grid :deep(.el-input-number) {
+  width: 100%;
 }
 
 .muted-ai {

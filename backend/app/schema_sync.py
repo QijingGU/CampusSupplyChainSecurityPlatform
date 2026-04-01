@@ -1,5 +1,8 @@
 from sqlalchemy import inspect, text
 
+from .database import Base
+from .models.ids_source import IDSSource, IDSSourceSyncAttempt
+
 
 SCHEMA_PATCHES: dict[str, dict[str, str]] = {
     "ids_events": {
@@ -68,6 +71,7 @@ SCHEMA_PATCHES: dict[str, dict[str, str]] = {
 
 
 def ensure_schema(engine):
+    Base.metadata.create_all(bind=engine, tables=[IDSSource.__table__, IDSSourceSyncAttempt.__table__])
     inspector = inspect(engine)
     with engine.begin() as conn:
         for table, columns in SCHEMA_PATCHES.items():

@@ -94,3 +94,58 @@ security-center workflows change.
   - committed the current IDS refactor slice as
     `feat: normalize ids incident workflow`,
   - pushed `security-center/feature-ids` to GitHub for review.
+- Began the second IDS slice at `specs/002-ids-source-operations/`:
+  - audited the new source-operations spec, plan, tasks, contract, and
+    quickstart against the IDS constitution,
+  - confirmed the Spec Kit scripts can stay compatible with the team branch
+    workflow by setting `SPECIFY_FEATURE=002-ids-source-operations` before
+    running prerequisite checks,
+  - tightened the source-operations docs so `demo_test` source records stay
+    distinct from production `custom_project` or `external_mature` sources,
+  - clarified that skipped sync attempts do not satisfy freshness and do not
+    convert never-synced sources into healthy sources,
+  - expanded `specs/002-ids-source-operations/quickstart.md` with explicit
+    API-level validation steps for source registration, source listing, and sync
+    tracing.
+- Completed the first implementation pass for
+  `specs/002-ids-source-operations/`:
+  - added `backend/app/models/ids_source.py` with persisted source registry and
+    sync-attempt tables,
+  - updated `backend/app/schema_sync.py` so existing deployments create the new
+    IDS source tables safely,
+  - added `backend/app/services/ids_source_ops.py` for source-key normalization,
+    health derivation, recent incident linkage, and sync-attempt summaries,
+  - extended `backend/app/api/ids.py` with `GET/POST/PUT /api/ids/sources` and
+    `POST /api/ids/sources/{source_id}/sync`,
+  - extended `frontend/src/api/ids.ts` and
+    `frontend/src/views/security/SecurityIDS.vue` with a source-operations panel,
+    source registry form, health table, and sync actions.
+- Validation for the current slice:
+  - Python `py_compile` passes for the updated IDS source model, service,
+    schema, and API files,
+  - frontend `npm run build` passes after the source-operations UI changes,
+  - local `TestClient` validation confirmed:
+    - trusted source creation returns `never_synced` before its first refresh,
+    - `demo_test` sources remain distinct from trusted production-oriented
+      records,
+    - successful sync returns `result_status=success` and transitions the source
+      to `healthy`,
+    - a source updated to `operational_status=failing` returns
+      `result_status=failed` and remains visibly `failing`,
+    - a `demo_test` source with `sync_mode=not_applicable` returns
+      `result_status=skipped`,
+    - ingesting a real IDS event with `detector_name=source_key` increments the
+      source's recent incident linkage count.
+- Cleanup pass:
+  - clarified normalized ingest/source-registry boundary wording in
+    `backend/app/api/ids.py`,
+  - clarified source-registry provenance comments in
+    `backend/app/services/ids_ingestion.py`,
+  - added explicit source-operations payload notes in `frontend/src/api/ids.ts`.
+- Remaining gaps:
+  - interactive browser click-through of the new source panel is still pending;
+    current UI validation is based on build success plus API-level verification,
+  - final cleanup/commit/push for this slice is still pending.
+- Next step: re-audit the implemented `002-ids-source-operations` slice; if no
+  new blocking findings appear, finish the remaining cleanup/validation tasks
+  and prepare commit/push.

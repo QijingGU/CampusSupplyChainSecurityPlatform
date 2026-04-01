@@ -8,6 +8,9 @@ REAL_EVENT_ORIGIN = "real"
 DEMO_EVENT_ORIGIN = "demo"
 TEST_EVENT_ORIGIN = "test"
 
+# Event ingestion keeps production provenance classes aligned with the source
+# registry. Demo/test-only source records stay in the registry layer instead of
+# expanding the normalized event contract.
 SOURCE_EXTERNAL_MATURE = "external_mature"
 SOURCE_CUSTOM_PROJECT = "custom_project"
 SOURCE_TRANSITIONAL_LOCAL = "transitional_local"
