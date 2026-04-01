@@ -9,6 +9,8 @@ from .warning import Warning
 from .chat_history import ChatHistory
 from .audit_log import AuditLog
 from .ids_event import IDSEvent
+from .ids_source import IDSSource, IDSSourceSyncAttempt
+from .ids_source_package import IDSSourcePackageActivation, IDSSourcePackageIntake
 
 __all__ = [
     "User",
@@ -25,4 +27,8 @@ __all__ = [
     "ChatHistory",
     "AuditLog",
     "IDSEvent",
+    "IDSSource",
+    "IDSSourceSyncAttempt",
+    "IDSSourcePackageIntake",
+    "IDSSourcePackageActivation",
 ]
