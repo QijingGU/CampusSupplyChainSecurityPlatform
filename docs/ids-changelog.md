@@ -146,6 +146,10 @@ security-center workflows change.
   - interactive browser click-through of the new source panel is still pending;
     current UI validation is based on build success plus API-level verification,
   - final cleanup/commit/push for this slice is still pending.
-- Next step: re-audit the implemented `002-ids-source-operations` slice; if no
-  new blocking findings appear, finish the remaining cleanup/validation tasks
-  and prepare commit/push.
+- Delivery:
+  - committed the current source-operations slice as
+    `feat: add ids source operations`,
+  - pushed `security-center/feature-ids` to GitHub at commit `afce70a`.
+- Next step: finish `T020` by running an interactive browser click-through of
+  the new source panel, then re-audit the implemented
+  `002-ids-source-operations` slice for any last UI-level gaps.

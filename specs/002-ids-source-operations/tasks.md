@@ -97,7 +97,7 @@ results remain visible, and verify source health updates accordingly.
 
 - [X] T019 [P] Clean up stale source-operation wording and transitional comments across backend/app/api/ids.py, backend/app/services/ids_ingestion.py, and frontend/src/api/ids.ts
 - [ ] T020 Run the API-level and UI-level validation flow in specs/002-ids-source-operations/quickstart.md and capture results in docs/ids-changelog.md
-- [ ] T021 Prepare a reviewable commit and push current work to origin security-center/feature-ids
+- [X] T021 Prepare a reviewable commit and push current work to origin security-center/feature-ids
 
 ---
 
