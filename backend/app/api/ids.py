@@ -14,6 +14,7 @@ from ..config import settings
 from ..database import get_db
 from ..models.ids_event import IDSEvent
 from ..models.ids_source import IDSSource, IDSSourceSyncAttempt
+from ..models.ids_source_package import IDSSourcePackageActivation, IDSSourcePackageIntake
 from ..services.ids_ai_analysis import is_llm_available, run_ai_analysis_sync
 from ..services.ids_engine import block_ip_windows, unblock_ip_windows
 from ..services.ids_ingestion import (
@@ -50,6 +51,16 @@ from ..services.ids_source_ops import (
     list_recent_source_activity,
     list_recent_sync_attempts,
     normalize_source_key,
+)
+from ..services.ids_source_packages import (
+    PACKAGE_RESULT_ACTIVATED,
+    PACKAGE_RESULT_FAILED,
+    PACKAGE_RESULT_PREVIEWED,
+    PACKAGE_RESULT_REJECTED,
+    build_package_preview_summary,
+    list_latest_package_activations,
+    list_recent_package_activations,
+    list_recent_package_intakes,
 )
 
 router = APIRouter(prefix="/ids", tags=["ids"])
@@ -113,6 +124,22 @@ class SourceRegistryRequest(BaseModel):
 class SourceSyncRequest(BaseModel):
     triggered_by: str
     reason: str = ""
+
+
+class SourcePackagePreviewRequest(BaseModel):
+    source_key: str
+    package_version: str
+    release_timestamp: datetime | None = None
+    trust_classification: str
+    detector_family: str
+    provenance_note: str = ""
+    triggered_by: str
+
+
+class SourcePackageActivationRequest(BaseModel):
+    package_intake_id: int
+    triggered_by: str
+    activation_note: str = ""
 
 
 @router.get("/events")
@@ -235,8 +262,16 @@ def list_ids_sources(
     )
     activity_map = list_recent_source_activity(db, [row.source_key or "" for row in rows])
     attempts_map = list_recent_sync_attempts(db, [int(row.id) for row in rows])
+    intake_map = list_recent_package_intakes(db, [int(row.id) for row in rows])
+    activation_map = list_latest_package_activations(db, [int(row.id) for row in rows])
     items = [
-        _serialize_ids_source(row, activity=activity_map.get(row.source_key or ""), attempts=attempts_map.get(int(row.id), []))
+        _serialize_ids_source(
+            row,
+            activity=activity_map.get(row.source_key or ""),
+            attempts=attempts_map.get(int(row.id), []),
+            package_intakes=intake_map.get(int(row.id), []),
+            package_activation=activation_map.get(int(row.id)),
+        )
         for row in rows
     ]
     return {"total": len(items), "items": items, "summary": _summarize_sources(items)}
@@ -264,7 +299,7 @@ def create_ids_source(
     db.add(source)
     db.commit()
     db.refresh(source)
-    return _serialize_ids_source(source, activity={}, attempts=[])
+    return _serialize_ids_source(source, activity={}, attempts=[], package_intakes=[], package_activation=None)
 
 
 @router.put("/sources/{source_id}")
@@ -288,7 +323,15 @@ def update_ids_source(
     db.refresh(source)
     activity_map = list_recent_source_activity(db, [source.source_key or ""])
     attempts_map = list_recent_sync_attempts(db, [int(source.id)])
-    return _serialize_ids_source(source, activity=activity_map.get(source.source_key or ""), attempts=attempts_map.get(int(source.id), []))
+    intake_map = list_recent_package_intakes(db, [int(source.id)])
+    activation_map = list_latest_package_activations(db, [int(source.id)])
+    return _serialize_ids_source(
+        source,
+        activity=activity_map.get(source.source_key or ""),
+        attempts=attempts_map.get(int(source.id), []),
+        package_intakes=intake_map.get(int(source.id), []),
+        package_activation=activation_map.get(int(source.id)),
+    )
 
 
 @router.post("/sources/{source_id}/sync")
@@ -348,10 +391,14 @@ def trigger_ids_source_sync(
 
     activity_map = list_recent_source_activity(db, [source.source_key or ""])
     attempts_map = list_recent_sync_attempts(db, [int(source.id)])
+    intake_map = list_recent_package_intakes(db, [int(source.id)])
+    activation_map = list_latest_package_activations(db, [int(source.id)])
     serialized = _serialize_ids_source(
         source,
         activity=activity_map.get(source.source_key or ""),
         attempts=attempts_map.get(int(source.id), []),
+        package_intakes=intake_map.get(int(source.id), []),
+        package_activation=activation_map.get(int(source.id)),
     )
     return {
         "source_id": source.id,
@@ -362,6 +409,221 @@ def trigger_ids_source_sync(
         "detail": attempt.detail or "",
         "source": serialized,
     }
+
+
+@router.post("/source-packages/preview")
+def preview_ids_source_package(
+    req: SourcePackagePreviewRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    source_key = normalize_source_key(req.source_key)
+    package_version = (req.package_version or "").strip()[:64]
+    trust_classification = (req.trust_classification or "").strip()
+    detector_family = (req.detector_family or "").strip()[:32]
+    provenance_note = (req.provenance_note or "").strip()[:2000]
+    triggered_by = (req.triggered_by or "").strip()[:64]
+
+    if not source_key:
+        raise HTTPException(status_code=400, detail="source_key is required")
+    if not package_version:
+        raise HTTPException(status_code=400, detail="package_version is required")
+    if trust_classification not in TRUST_CLASSIFICATIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid trust_classification: {trust_classification}")
+    if not detector_family:
+        raise HTTPException(status_code=400, detail="detector_family is required")
+    if not triggered_by:
+        raise HTTPException(status_code=400, detail="triggered_by is required")
+
+    source = db.query(IDSSource).filter(IDSSource.source_key == source_key).first()
+    if not source:
+        intake = IDSSourcePackageIntake(
+            source_id=None,
+            source_key=source_key,
+            package_version=package_version,
+            release_timestamp=req.release_timestamp,
+            trust_classification=trust_classification,
+            detector_family=detector_family,
+            provenance_note=provenance_note,
+            intake_result=PACKAGE_RESULT_REJECTED,
+            intake_detail=f"source_key not found: {source_key}",
+            triggered_by=triggered_by,
+        )
+        db.add(intake)
+        db.commit()
+        raise HTTPException(status_code=400, detail=f"source_key not found: {source_key}")
+
+    latest_activation_map = list_latest_package_activations(db, [int(source.id)])
+    preview = build_package_preview_summary(
+        source,
+        package_version=package_version,
+        release_timestamp=req.release_timestamp,
+        provenance_note=provenance_note,
+        active_activation=latest_activation_map.get(int(source.id)),
+    )
+    intake = IDSSourcePackageIntake(
+        source_id=source.id,
+        source_key=source_key,
+        package_version=package_version,
+        release_timestamp=req.release_timestamp,
+        trust_classification=trust_classification,
+        detector_family=detector_family,
+        provenance_note=provenance_note,
+        intake_result=PACKAGE_RESULT_PREVIEWED,
+        intake_detail=preview["version_change_state"],
+        triggered_by=triggered_by,
+    )
+    db.add(intake)
+    db.commit()
+    db.refresh(intake)
+    return {
+        "package_intake_id": intake.id,
+        "source_id": preview["source_id"],
+        "source_key": preview["source_key"],
+        "package_version": preview["package_version"],
+        "version_change_state": preview["version_change_state"],
+        "changed_fields": preview["changed_fields"],
+        "visible_warning": preview["visible_warning"],
+        "intake_result": intake.intake_result,
+    }
+
+
+@router.post("/source-packages/activate")
+def activate_ids_source_package(
+    req: SourcePackageActivationRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    triggered_by = (req.triggered_by or "").strip()[:64]
+    activation_note = (req.activation_note or "").strip()[:1000]
+    if not triggered_by:
+        raise HTTPException(status_code=400, detail="triggered_by is required")
+
+    intake = db.query(IDSSourcePackageIntake).filter(IDSSourcePackageIntake.id == req.package_intake_id).first()
+    if not intake:
+        raise HTTPException(status_code=404, detail="Package intake not found")
+    if intake.source_id is None:
+        detail = _build_activation_failure_detail(
+            "Rejected package previews cannot be activated",
+            activation_note=activation_note,
+        )
+        _record_failed_package_activation(intake, detail=detail, triggered_by=triggered_by, db=db)
+        raise HTTPException(status_code=400, detail="Rejected package previews cannot be activated")
+    if (intake.trust_classification or "").strip() == SOURCE_DEMO_TEST:
+        detail = _build_activation_failure_detail(
+            "demo_test packages cannot be activated as trusted coverage",
+            activation_note=activation_note,
+        )
+        _record_failed_package_activation(intake, detail=detail, triggered_by=triggered_by, db=db)
+        raise HTTPException(status_code=400, detail="demo_test packages cannot be activated as trusted coverage")
+
+    source = _get_source_or_404(db, int(intake.source_id))
+    latest_activation_map = list_latest_package_activations(db, [int(source.id)])
+    latest_activation = latest_activation_map.get(int(source.id))
+    if latest_activation and (latest_activation.package_version or "") == (intake.package_version or ""):
+        detail = activation_note or "Package version already active; activation re-recorded."
+    else:
+        detail = activation_note or "Reviewed package version activated."
+
+    activation = IDSSourcePackageActivation(
+        source_id=source.id,
+        package_intake_id=intake.id,
+        package_version=intake.package_version,
+        activated_by=triggered_by,
+        activation_detail=detail,
+    )
+    intake.intake_result = PACKAGE_RESULT_ACTIVATED
+    intake.intake_detail = detail
+    db.add(activation)
+    db.commit()
+    db.refresh(activation)
+
+    return {
+        "source_id": source.id,
+        "package_activation_id": activation.id,
+        "package_version": activation.package_version or "",
+        "result_status": PACKAGE_RESULT_ACTIVATED,
+        "active_package_version": activation.package_version or "",
+        "detail": activation.activation_detail or "",
+    }
+
+
+@router.get("/source-packages")
+def list_ids_source_packages(
+    source_id: int | None = Query(None, ge=1),
+    source_key: str | None = Query(None),
+    limit: int = Query(5, ge=1, le=20),
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    # Keep package-history queries source-scoped and bounded so reviewers can
+    # inspect intake failures and trusted activations without leaving IDS.
+    normalized_source_key = normalize_source_key(source_key or "")
+    if source_id is not None:
+        source = _get_source_or_404(db, source_id)
+        intake_map = list_recent_package_intakes(db, [int(source.id)], limit_per_source=limit)
+        activation_map = list_recent_package_activations(db, [int(source.id)], limit_per_source=limit)
+        item = _build_source_package_history_item(
+            source,
+            intakes=intake_map.get(int(source.id), []),
+            activations=activation_map.get(int(source.id), []),
+        )
+        return {"total": 1, "items": [item]}
+
+    if normalized_source_key:
+        source = db.query(IDSSource).filter(IDSSource.source_key == normalized_source_key).first()
+        if source:
+            intake_map = list_recent_package_intakes(db, [int(source.id)], limit_per_source=limit)
+            activation_map = list_recent_package_activations(db, [int(source.id)], limit_per_source=limit)
+            item = _build_source_package_history_item(
+                source,
+                intakes=intake_map.get(int(source.id), []),
+                activations=activation_map.get(int(source.id), []),
+            )
+            return {"total": 1, "items": [item]}
+
+        orphaned_intakes = (
+            db.query(IDSSourcePackageIntake)
+            .filter(IDSSourcePackageIntake.source_key == normalized_source_key)
+            .filter(IDSSourcePackageIntake.source_id.is_(None))
+            .order_by(IDSSourcePackageIntake.created_at.desc(), IDSSourcePackageIntake.id.desc())
+            .limit(limit)
+            .all()
+        )
+        if orphaned_intakes:
+            return {
+                "total": 1,
+                "items": [
+                    {
+                        "source": None,
+                        "source_key": normalized_source_key,
+                        "active_package_version": "",
+                        "active_package_activated_at": None,
+                        "active_package_activated_by": "",
+                        "recent_intakes": [_serialize_source_package_intake(intake) for intake in orphaned_intakes],
+                        "recent_activations": [],
+                    }
+                ],
+            }
+        raise HTTPException(status_code=404, detail=f"source_key not found: {normalized_source_key}")
+
+    rows = (
+        db.query(IDSSource)
+        .order_by(IDSSource.updated_at.desc(), IDSSource.id.desc())
+        .all()
+    )
+    source_ids = [int(row.id) for row in rows]
+    intake_map = list_recent_package_intakes(db, source_ids, limit_per_source=limit)
+    activation_map = list_recent_package_activations(db, source_ids, limit_per_source=limit)
+    items = [
+        _build_source_package_history_item(
+            row,
+            intakes=intake_map.get(int(row.id), []),
+            activations=activation_map.get(int(row.id), []),
+        )
+        for row in rows
+    ]
+    return {"total": len(items), "items": items}
 
 
 @router.post("/events/ingest")
@@ -1166,12 +1428,22 @@ def _serialize_ids_source(
     *,
     activity: dict | None = None,
     attempts: list[IDSSourceSyncAttempt] | None = None,
+    package_intakes: list[IDSSourcePackageIntake] | None = None,
+    package_activation: IDSSourcePackageActivation | None = None,
 ) -> dict:
     activity = activity or {}
     attempts = attempts or []
+    package_intakes = package_intakes or []
     health_state = derive_source_health_state(source)
     recent_count = int(activity.get("recent_incident_count") or 0)
     recent_last_seen = activity.get("recent_incident_last_seen_at")
+    package_preview = build_package_preview_summary(
+        source,
+        package_version=package_intakes[0].package_version if package_intakes else "",
+        release_timestamp=package_intakes[0].release_timestamp if package_intakes else None,
+        provenance_note=package_intakes[0].provenance_note if package_intakes else "",
+        active_activation=package_activation,
+    ) if package_intakes else None
     return {
         "id": source.id,
         "source_key": source.source_key or "",
@@ -1194,7 +1466,86 @@ def _serialize_ids_source(
         "updated_at": _format_dt(source.updated_at),
         "latest_sync_attempt": _serialize_source_sync_attempt(attempts[0]) if attempts else None,
         "recent_sync_attempts": [_serialize_source_sync_attempt(attempt) for attempt in attempts],
+        "active_package_version": package_activation.package_version if package_activation else "",
+        "active_package_activated_at": _format_dt(package_activation.activated_at) if package_activation else None,
+        "active_package_activated_by": package_activation.activated_by if package_activation else "",
+        "latest_package_preview": package_preview,
+        "recent_package_intakes": [_serialize_source_package_intake(intake) for intake in package_intakes],
     }
+
+
+def _serialize_source_package_intake(intake: IDSSourcePackageIntake) -> dict:
+    return {
+        "id": intake.id,
+        "source_id": intake.source_id,
+        "source_key": intake.source_key or "",
+        "package_version": intake.package_version or "",
+        "release_timestamp": _format_dt(intake.release_timestamp),
+        "trust_classification": intake.trust_classification or "",
+        "detector_family": intake.detector_family or "",
+        "provenance_note": (intake.provenance_note or "")[:2000],
+        "intake_result": intake.intake_result or "",
+        "intake_detail": (intake.intake_detail or "")[:1000],
+        "triggered_by": intake.triggered_by or "",
+        "created_at": _format_dt(intake.created_at),
+    }
+
+
+def _serialize_source_package_activation(activation: IDSSourcePackageActivation) -> dict:
+    return {
+        "id": activation.id,
+        "source_id": activation.source_id,
+        "package_intake_id": activation.package_intake_id,
+        "package_version": activation.package_version or "",
+        "activated_at": _format_dt(activation.activated_at),
+        "activated_by": activation.activated_by or "",
+        "activation_detail": (activation.activation_detail or "")[:1000],
+        "created_at": _format_dt(activation.created_at),
+    }
+
+
+def _build_source_package_history_item(
+    source: IDSSource,
+    *,
+    intakes: list[IDSSourcePackageIntake],
+    activations: list[IDSSourcePackageActivation],
+) -> dict:
+    latest_activation = activations[0] if activations else None
+    return {
+        "source": {
+            "id": source.id,
+            "source_key": source.source_key or "",
+            "display_name": source.display_name or "",
+            "trust_classification": source.trust_classification or "",
+            "detector_family": source.detector_family or "",
+        },
+        "source_key": source.source_key or "",
+        "active_package_version": latest_activation.package_version if latest_activation else "",
+        "active_package_activated_at": _format_dt(latest_activation.activated_at) if latest_activation else None,
+        "active_package_activated_by": latest_activation.activated_by if latest_activation else "",
+        "recent_intakes": [_serialize_source_package_intake(intake) for intake in intakes],
+        "recent_activations": [_serialize_source_package_activation(activation) for activation in activations],
+    }
+
+
+def _record_failed_package_activation(
+    intake: IDSSourcePackageIntake,
+    *,
+    detail: str,
+    triggered_by: str,
+    db: Session,
+):
+    intake.intake_result = PACKAGE_RESULT_FAILED
+    intake.intake_detail = detail[:1000]
+    intake.triggered_by = triggered_by or intake.triggered_by or ""
+    db.commit()
+    db.refresh(intake)
+
+
+def _build_activation_failure_detail(reason: str, *, activation_note: str = "") -> str:
+    if activation_note:
+        return f"{reason} Operator note: {activation_note}"
+    return reason
 
 
 def _summarize_sources(items: list[dict]) -> dict:

@@ -153,3 +153,136 @@ security-center workflows change.
 - Next step: finish `T020` by running an interactive browser click-through of
   the new source panel, then re-audit the implemented
   `002-ids-source-operations` slice for any last UI-level gaps.
+- Started the next IDS planning slice at `specs/003-ids-source-package-intake/`:
+  - defined the next gap after source operations as trusted package preview,
+    activation, and package-history traceability,
+  - kept the new slice aligned with mature-source reuse rather than expanding
+    local matcher logic,
+  - documented the first `003` spec, plan, research, data model, contract,
+    quickstart, and tasks set for later implementation.
+- Completed the first implementation pass for
+  `specs/003-ids-source-package-intake/`:
+  - added `backend/app/models/ids_source_package.py` with package-intake and
+    package-activation tables,
+  - updated `backend/app/schema_sync.py` with package table creation plus a
+    compatibility migration so `ids_source_package_intakes.source_id` can stay
+    nullable for rejected previews,
+  - added `backend/app/services/ids_source_packages.py` for package version
+    normalization, version comparison, preview summaries, and package history
+    lookup,
+  - extended `backend/app/api/ids.py` with
+    `POST /api/ids/source-packages/preview` and package-aware source
+    serialization,
+  - extended `frontend/src/api/ids.ts` and
+    `frontend/src/views/security/SecurityIDS.vue` with package preview types,
+    preview dialog, and source-table package summary rendering.
+- Validation for the current `003` pass:
+  - Python `py_compile` passes for the updated package model, service, schema,
+    and IDS API files,
+  - frontend `npm run build` passes after the package-preview UI changes,
+  - local API validation confirmed:
+    - a known source package preview returns `intake_result=previewed` with
+      `version_change_state=newer`,
+    - a missing `source_key` preview returns HTTP 400 but still persists a
+      rejected package intake row with `source_id=NULL`,
+    - source listing still returns package-aware summary fields without
+      breaking the existing source-operations response shape.
+- Completed the `003` activation workflow (`US2`):
+  - finished `POST /api/ids/source-packages/activate` so reviewed intake
+    records can create activation history and update the intake result to
+    `activated`,
+  - tightened `frontend/src/views/security/SecurityIDS.vue` so the activation
+    dialog shows the exact candidate package, the row-level `Activating...`
+    state only appears during the real request, and the latest package result
+    plus trust classification stay visible in the source table,
+  - kept `demo_test` packages visibly separate in the UI and blocked them from
+    being activated as trusted coverage.
+- Validation for the activation pass:
+  - Python `py_compile` still passes for `backend/app/api/ids.py`,
+    `backend/app/models/ids_source_package.py`,
+    `backend/app/services/ids_source_packages.py`, and
+    `backend/app/schema_sync.py`,
+  - frontend `npm run build` passes after the activation UI changes,
+  - local `TestClient` validation confirmed:
+    - a reviewed package for `codex-activation-20260401` activates successfully
+      and the source listing shows `active_package_version=2026.04.01`,
+    - a `demo_test` preview remains previewable for review but activation is
+      rejected with HTTP 400 and
+      `demo_test packages cannot be activated as trusted coverage`.
+- Audit follow-up for `003`:
+  - found and fixed one traceability gap where failed activation attempts were
+    rejected but not persisted for later review,
+  - `POST /api/ids/source-packages/activate` now updates the intake record to
+    `failed` with operator-visible detail when a rejected activation path is
+    attempted.
+- Validation for the audit fix:
+  - local `TestClient` validation confirmed the latest intake on
+    `codex-activation-audit-20260401080137` now shows
+    `intake_result=failed` and keeps the rejection reason after a blocked
+    `demo_test` activation attempt, while the previously activated trusted
+    package remains the active version.
+- Completed the `003` package-history slice (`US3`):
+  - added `GET /api/ids/source-packages` so source-specific package history can
+    be queried with recent intakes and recent activations,
+  - extended `frontend/src/api/ids.ts` and
+    `frontend/src/views/security/SecurityIDS.vue` with a source `History`
+    action, a package-history dialog, and visible inline package-result tags in
+    the source table,
+  - updated `specs/003-ids-source-package-intake/quickstart.md` with the exact
+    validation path for activation success, demo/test rejection visibility, and
+    source-history review.
+- Validation for the package-history pass:
+  - Python `py_compile` passes for the updated package-history backend files,
+  - frontend `npm run build` passes after the history dialog changes,
+  - local `TestClient` validation confirmed:
+    - `GET /api/ids/source-packages?source_id=<id>&limit=5` returns both
+      `recent_intakes` and `recent_activations`,
+    - the validated source `codex-history-20260401080652` shows
+      `active_package_version=2026.04.03`,
+    - the same history payload preserves a latest failed `demo_test` intake and
+      still shows the earlier trusted activation in `recent_activations`.
+- Cleanup pass:
+  - tightened package-history wording in `backend/app/api/ids.py`,
+  - clarified the bounded reviewer-facing history query note in
+    `backend/app/services/ids_source_packages.py`,
+  - updated the shared IDS API type comment in `frontend/src/api/ids.ts` so it
+    covers both source operations and package history.
+- Quickstart validation progress for `T020`:
+  - completed the API-level quickstart flow for `003` with a fresh validation
+    source,
+  - confirmed:
+    - trusted preview returns `version_change_state=newer`,
+    - an invalid preview fails with actionable validation detail
+      (`package_version is required`),
+    - an unknown-source preview is persisted as `rejected` with `source_id=NULL`,
+    - trusted activation returns `result_status=activated` and updates
+      `active_package_version=2026.04.04`,
+    - blocked `demo_test` activation keeps a latest failed intake while package
+      history still shows the last trusted activation.
+  - frontend production build still passes, but a true browser click-through of
+    the security-center dialogs is still pending because this session has not
+    executed interactive UI automation against the live page yet.
+- UI polish pass for the IDS source/package panel:
+  - converted the visible source-operation and package-intake workflow copy in
+    `frontend/src/views/security/SecurityIDS.vue` from English-heavy wording to
+    Chinese-first labels, buttons, dialogs, and state text,
+  - tightened the source-operations card styling so the package workflow reads
+    more like an operator panel than a generic table block,
+  - kept the current technical values and API payloads unchanged while aligning
+    the reviewer-facing language with the project's Chinese UI preference.
+- Validation for the UI polish pass:
+  - frontend `npm run build` still passes after the Chinese-first UI update and
+    source/package styling adjustments.
+- Manual UI validation completed for `003` on the live security-center page:
+  - verified the source row `Manual UI Validation Source / manual-ui-20260401`
+    can preview `2026.04.10`, then activate it successfully so the row shows
+    `当前激活包：2026.04.10`,
+  - verified the same source history dialog shows the correct source key,
+    current active package, recent intake records, and recent activation
+    records,
+  - verified a `demo_test` package preview succeeds for review but leaves the
+    `激活` action unavailable in the UI, preserving the trusted active package
+    version instead of overwriting it.
+- Remaining gaps for `003`:
+  - reviewable commit/push work (`T021`) is still pending after the final
+    validation pass.

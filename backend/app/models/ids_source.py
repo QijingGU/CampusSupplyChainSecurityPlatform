@@ -29,6 +29,18 @@ class IDSSource(Base):
         cascade="all, delete-orphan",
         order_by="desc(IDSSourceSyncAttempt.started_at)",
     )
+    package_intakes = relationship(
+        "IDSSourcePackageIntake",
+        back_populates="source",
+        cascade="all, delete-orphan",
+        order_by="desc(IDSSourcePackageIntake.created_at)",
+    )
+    package_activations = relationship(
+        "IDSSourcePackageActivation",
+        back_populates="source",
+        cascade="all, delete-orphan",
+        order_by="desc(IDSSourcePackageActivation.activated_at)",
+    )
 
 
 class IDSSourceSyncAttempt(Base):

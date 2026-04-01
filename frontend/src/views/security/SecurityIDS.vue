@@ -24,10 +24,26 @@ import {
   createIDSSource,
   updateIDSSource,
   syncIDSSource,
+  previewIDSSourcePackage,
+  activateIDSSourcePackage,
+  listIDSSourcePackages,
 } from '@/api/ids'
-import type { IDSEventItem, IDSStatsResponse, IDSSourceItem, IDSSourceListResponse, IDSSourceRegistryPayload } from '@/api/ids'
+import type {
+  IDSEventItem,
+  IDSStatsResponse,
+  IDSSourceItem,
+  IDSSourcePackageActivationItem,
+  IDSSourcePackageHistoryItem,
+  IDSSourceListResponse,
+  IDSSourcePackageIntakeItem,
+  IDSSourceRegistryPayload,
+  IDSSourcePackagePreviewPayload,
+  IDSSourcePackagePreviewResponse,
+} from '@/api/ids'
 
 type SourceFormState = IDSSourceRegistryPayload
+type PackagePreviewFormState = IDSSourcePackagePreviewPayload
+type PackageActivationFormState = { package_intake_id: number; triggered_by: string; activation_note: string }
 
 const loading = ref(false)
 const trendDays = ref(7)
@@ -51,6 +67,21 @@ const sourceSaving = ref(false)
 const sourceDialogVisible = ref(false)
 const sourceSyncingId = ref<number | null>(null)
 const editingSourceId = ref<number | null>(null)
+const packagePreviewing = ref(false)
+const packagePreviewDialogVisible = ref(false)
+const packageActivationDialogVisible = ref(false)
+const packageHistoryDialogVisible = ref(false)
+const packageActivating = ref(false)
+const packageActivatingSourceId = ref<number | null>(null)
+const packageActivationTarget = ref<{
+  sourceId: number
+  sourceKey: string
+  displayName: string
+  intake: IDSSourcePackageIntakeItem
+} | null>(null)
+const packageHistoryLoading = ref(false)
+const packageHistory = ref<IDSSourcePackageHistoryItem | null>(null)
+const latestPackagePreviewResult = ref<IDSSourcePackagePreviewResponse | null>(null)
 const sourceRows = ref<IDSSourceItem[]>([])
 const sourceSummary = ref<IDSSourceListResponse['summary']>({
   total: 0,
@@ -117,6 +148,33 @@ function createSourceFormDefaults(): SourceFormState {
 }
 
 const sourceForm = reactive<SourceFormState>(createSourceFormDefaults())
+
+function createPackagePreviewFormDefaults(): PackagePreviewFormState {
+  return {
+    source_key: '',
+    package_version: '',
+    trust_classification: 'external_mature',
+    detector_family: 'network',
+    provenance_note: '',
+    triggered_by: 'system_admin',
+  }
+}
+
+const packagePreviewForm = reactive<PackagePreviewFormState>(createPackagePreviewFormDefaults())
+
+const packageActivationForm = reactive<PackageActivationFormState>({
+  package_intake_id: 0,
+  triggered_by: 'system_admin',
+  activation_note: '',
+})
+
+function resetPackageActivationForm() {
+  packageActivationForm.package_intake_id = 0
+  packageActivationForm.triggered_by = 'system_admin'
+  packageActivationForm.activation_note = ''
+  packageActivationTarget.value = null
+  packageActivatingSourceId.value = null
+}
 
 function buildStatsFilters() {
   return {
@@ -381,10 +439,10 @@ function responseResultTagType(value: string | null | undefined): 'success' | 'd
 }
 
 function sourceTrustClassificationLabel(value: string | null | undefined): string {
-  if (value === 'external_mature') return 'Mature External'
-  if (value === 'custom_project') return 'Custom Project'
-  if (value === 'transitional_local') return 'Transitional Local'
-  if (value === 'demo_test') return 'Demo / Test'
+  if (value === 'external_mature') return '成熟外部规则'
+  if (value === 'custom_project') return '项目自定义规则'
+  if (value === 'transitional_local') return '过渡本地规则'
+  if (value === 'demo_test') return '演示 / 测试'
   return value?.trim() || '-'
 }
 
@@ -396,11 +454,11 @@ function sourceTrustClassificationTagType(value: string | null | undefined): 'su
 }
 
 function sourceHealthLabel(value: string | null | undefined): string {
-  if (value === 'healthy') return 'Healthy'
-  if (value === 'stale') return 'Stale'
-  if (value === 'disabled') return 'Disabled'
-  if (value === 'failing') return 'Failing'
-  if (value === 'never_synced') return 'Never Synced'
+  if (value === 'healthy') return '健康'
+  if (value === 'stale') return '需更新'
+  if (value === 'disabled') return '已停用'
+  if (value === 'failing') return '异常'
+  if (value === 'never_synced') return '未同步'
   return value?.trim() || '-'
 }
 
@@ -412,17 +470,17 @@ function sourceHealthTagType(value: string | null | undefined): 'success' | 'war
 }
 
 function sourceOperationalStatusLabel(value: string | null | undefined): string {
-  if (value === 'enabled') return 'Enabled'
-  if (value === 'disabled') return 'Disabled'
-  if (value === 'failing') return 'Failing'
-  if (value === 'draft') return 'Draft'
+  if (value === 'enabled') return '启用'
+  if (value === 'disabled') return '停用'
+  if (value === 'failing') return '异常'
+  if (value === 'draft') return '草稿'
   return value?.trim() || '-'
 }
 
 function sourceSyncModeLabel(value: string | null | undefined): string {
-  if (value === 'manual') return 'Manual'
-  if (value === 'scheduled') return 'Scheduled'
-  if (value === 'not_applicable') return 'N/A'
+  if (value === 'manual') return '手动'
+  if (value === 'scheduled') return '定时'
+  if (value === 'not_applicable') return '不适用'
   return value?.trim() || '-'
 }
 
@@ -431,6 +489,14 @@ function sourceSyncResultTagType(value: string | null | undefined): 'success' | 
   if (value === 'failed') return 'danger'
   if (value === 'skipped') return 'warning'
   return 'info'
+}
+
+function sourceSyncResultLabel(value: string | null | undefined): string {
+  if (value === 'success') return '成功'
+  if (value === 'failed') return '失败'
+  if (value === 'skipped') return '已跳过'
+  if (value === 'never_synced') return '未同步'
+  return value?.trim() || '无记录'
 }
 
 function resetSourceForm() {
@@ -484,16 +550,16 @@ async function saveSource() {
     }
     if (editingSourceId.value) {
       await updateIDSSource(editingSourceId.value, payload)
-      ElMessage.success('Source updated')
+      ElMessage.success('规则源已更新')
     } else {
       await createIDSSource(payload)
-      ElMessage.success('Source created')
+      ElMessage.success('规则源已创建')
     }
     sourceDialogVisible.value = false
     resetSourceForm()
     await fetchSources()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || 'Source save failed')
+    ElMessage.error(e?.response?.data?.detail || e?.message || '规则源保存失败')
   } finally {
     sourceSaving.value = false
   }
@@ -504,15 +570,177 @@ async function runSourceSync(row: IDSSourceItem) {
   try {
     const res: any = await syncIDSSource(row.id, {
       triggered_by: 'system_admin',
-      reason: `manual sync from security center (${row.source_key})`,
+      reason: `安全中心手动同步（${row.source_key}）`,
     })
     const data = res?.data ?? res
-    ElMessage.success(`Sync ${data?.result_status || 'completed'} for ${row.display_name}`)
+    ElMessage.success(`规则源同步${sourceSyncResultLabel(data?.result_status)}：${row.display_name}`)
     await fetchSources()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || 'Source sync failed')
+    ElMessage.error(e?.response?.data?.detail || e?.message || '规则源同步失败')
   } finally {
     sourceSyncingId.value = null
+  }
+}
+
+function resetPackagePreviewForm() {
+  Object.assign(packagePreviewForm, createPackagePreviewFormDefaults())
+  latestPackagePreviewResult.value = null
+}
+
+function openPackagePreviewDialog(row?: IDSSourceItem) {
+  resetPackagePreviewForm()
+  if (row) {
+    packagePreviewForm.source_key = row.source_key
+    packagePreviewForm.trust_classification = row.trust_classification
+    packagePreviewForm.detector_family = row.detector_family
+    packagePreviewForm.provenance_note = row.provenance_note || ''
+  }
+  packagePreviewDialogVisible.value = true
+}
+
+function packageVersionStateLabel(value: string | null | undefined): string {
+  if (value === 'newer') return '较新'
+  if (value === 'unchanged') return '未变化'
+  if (value === 'older') return '较旧'
+  if (value === 'conflicting') return '存在冲突'
+  return value?.trim() || '-'
+}
+
+function packageVersionStateTagType(value: string | null | undefined): 'success' | 'warning' | 'info' | 'danger' {
+  if (value === 'newer') return 'success'
+  if (value === 'unchanged') return 'info'
+  if (value === 'older') return 'warning'
+  return 'danger'
+}
+
+function packageIntakeResultLabel(value: string | null | undefined): string {
+  if (value === 'previewed') return '已预览'
+  if (value === 'activated') return '已激活'
+  if (value === 'rejected') return '已拒绝'
+  if (value === 'failed') return '已失败'
+  return value?.trim() || '-'
+}
+
+function packageIntakeResultTagType(value: string | null | undefined): 'success' | 'warning' | 'info' | 'danger' {
+  if (value === 'activated') return 'success'
+  if (value === 'previewed') return 'info'
+  if (value === 'rejected') return 'danger'
+  return 'warning'
+}
+
+function canActivatePackageIntake(intake: IDSSourcePackageIntakeItem | null | undefined): boolean {
+  if (!intake) return false
+  if (intake.trust_classification === 'demo_test') return false
+  return true
+}
+
+function packageHistoryStateTagType(
+  intake: IDSSourcePackageIntakeItem | null | undefined,
+  activation: IDSSourcePackageActivationItem | null | undefined,
+): 'success' | 'warning' | 'info' | 'danger' {
+  if (activation) return 'success'
+  return packageIntakeResultTagType(intake?.intake_result)
+}
+
+function packageHistoryStateLabel(
+  intake: IDSSourcePackageIntakeItem | null | undefined,
+  activation: IDSSourcePackageActivationItem | null | undefined,
+): string {
+  if (activation) return '已激活'
+  return packageIntakeResultLabel(intake?.intake_result)
+}
+
+async function submitPackagePreview() {
+  packagePreviewing.value = true
+  try {
+    const payload: IDSSourcePackagePreviewPayload = {
+      source_key: packagePreviewForm.source_key.trim(),
+      package_version: packagePreviewForm.package_version.trim(),
+      trust_classification: packagePreviewForm.trust_classification,
+      detector_family: packagePreviewForm.detector_family.trim(),
+      provenance_note: packagePreviewForm.provenance_note?.trim() || '',
+      triggered_by: packagePreviewForm.triggered_by.trim() || 'system_admin',
+    }
+    const res: any = await previewIDSSourcePackage(payload)
+    const data = res?.data ?? res
+    latestPackagePreviewResult.value = data
+    ElMessage.success(`规则包预览${packageIntakeResultLabel(data?.intake_result)}`)
+    await fetchSources()
+  } catch (e: any) {
+    latestPackagePreviewResult.value = null
+    ElMessage.error(e?.response?.data?.detail || e?.message || '规则包预览失败')
+  } finally {
+    packagePreviewing.value = false
+  }
+}
+
+function openPackageActivationDialog(row: IDSSourceItem) {
+  const latestIntake = row.recent_package_intakes?.[0]
+  if (!latestIntake) {
+    ElMessage.warning('当前没有可激活的规则包预览记录')
+    return
+  }
+  if (latestIntake.trust_classification === 'demo_test') {
+    ElMessage.warning('演示 / 测试规则包不能作为受信覆盖激活')
+    return
+  }
+  packageActivationForm.package_intake_id = latestIntake.id
+  packageActivationForm.triggered_by = 'system_admin'
+  packageActivationForm.activation_note = ''
+  packageActivationTarget.value = {
+    sourceId: row.id,
+    sourceKey: row.source_key,
+    displayName: row.display_name,
+    intake: latestIntake,
+  }
+  packageActivationDialogVisible.value = true
+}
+
+function closePackageActivationDialog() {
+  packageActivationDialogVisible.value = false
+  resetPackageActivationForm()
+}
+
+async function openPackageHistoryDialog(row: IDSSourceItem) {
+  packageHistoryDialogVisible.value = true
+  packageHistoryLoading.value = true
+  packageHistory.value = null
+  try {
+    const res: any = await listIDSSourcePackages({ source_id: row.id, limit: 5 })
+    const data = res?.data ?? res
+    packageHistory.value = data?.items?.[0] ?? null
+  } catch (e: any) {
+    packageHistory.value = null
+    ElMessage.error(e?.response?.data?.detail || e?.message || '规则包历史加载失败')
+  } finally {
+    packageHistoryLoading.value = false
+  }
+}
+
+async function submitPackageActivation() {
+  if (!packageActivationTarget.value) {
+    ElMessage.warning('请先选择一个已审阅的规则包再激活')
+    return
+  }
+  packageActivating.value = true
+  packageActivatingSourceId.value = packageActivationTarget.value.sourceId
+  try {
+    const res: any = await activateIDSSourcePackage({
+      package_intake_id: packageActivationForm.package_intake_id,
+      triggered_by: packageActivationForm.triggered_by.trim() || 'system_admin',
+      activation_note: packageActivationForm.activation_note.trim(),
+    })
+    const data = res?.data ?? res
+    ElMessage.success(`规则包${packageIntakeResultLabel(data?.result_status)}完成`)
+    closePackageActivationDialog()
+    await fetchSources()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '规则包激活失败')
+  } finally {
+    packageActivating.value = false
+    if (packageActivationDialogVisible.value) {
+      packageActivatingSourceId.value = null
+    }
   }
 }
 
@@ -1326,47 +1554,53 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
       <div class="source-ops-card sec-card">
         <div class="source-ops-card__header">
           <div>
-            <div class="chart-title">Trusted Source Operations</div>
+            <div class="chart-title">受信规则源运营</div>
             <div class="source-ops-card__subtitle">
-              Review source health, separate demo/test records, and keep sync activity traceable.
+              聚焦规则源健康度、演示数据隔离和同步留痕，让规则包变更能被看见、被追溯。
             </div>
           </div>
-          <el-button type="primary" @click="openSourceCreateDialog">Add Source</el-button>
+          <div class="source-ops-card__actions">
+            <el-button @click="openPackagePreviewDialog()">预览规则包</el-button>
+            <el-button type="primary" @click="openSourceCreateDialog">新增规则源</el-button>
+          </div>
         </div>
 
         <div class="source-summary-grid">
           <div class="source-summary-tile">
             <span class="source-summary-tile__value">{{ sourceSummary.total }}</span>
-            <span class="source-summary-tile__label">Registry Total</span>
+            <span class="source-summary-tile__label">规则源总数</span>
           </div>
           <div class="source-summary-tile source-summary-tile--good">
             <span class="source-summary-tile__value">{{ sourceSummary.healthy_count }}</span>
-            <span class="source-summary-tile__label">Healthy</span>
+            <span class="source-summary-tile__label">健康规则源</span>
           </div>
           <div class="source-summary-tile source-summary-tile--warn">
             <span class="source-summary-tile__value">{{ sourceSummary.degraded_count }}</span>
-            <span class="source-summary-tile__label">Needs Review</span>
+            <span class="source-summary-tile__label">待复核规则源</span>
           </div>
           <div class="source-summary-tile">
             <span class="source-summary-tile__value">{{ sourceSummary.trusted_count }}</span>
-            <span class="source-summary-tile__label">Trusted Prod</span>
+            <span class="source-summary-tile__label">受信生产规则</span>
           </div>
           <div class="source-summary-tile source-summary-tile--demo">
             <span class="source-summary-tile__value">{{ sourceSummary.demo_test_count }}</span>
-            <span class="source-summary-tile__label">Demo/Test</span>
+            <span class="source-summary-tile__label">演示 / 测试</span>
           </div>
         </div>
 
         <el-table :data="sourceRows" v-loading="sourceLoading" class="sec-table source-ops-table" style="width: 100%">
-          <el-table-column label="Source" min-width="200">
+          <el-table-column label="规则源" min-width="200">
             <template #default="{ row }">
               <div class="cell-stack">
                 <span class="cell-ellipsis">{{ row.display_name }}</span>
                 <span class="cell-sub cell-mono">{{ row.source_key }}</span>
+                <span v-if="row.active_package_version" class="cell-sub">
+                  当前激活包：{{ row.active_package_version }}
+                </span>
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="Trust" width="168">
+          <el-table-column label="信任级别" width="168">
             <template #default="{ row }">
               <div class="cell-stack">
                 <el-tag size="small" :type="sourceTrustClassificationTagType(row.trust_classification)">
@@ -1376,17 +1610,17 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="Health" width="170">
+          <el-table-column label="健康状态" width="170">
             <template #default="{ row }">
               <div class="cell-stack">
                 <el-tag size="small" :type="sourceHealthTagType(row.health_state)">
                   {{ sourceHealthLabel(row.health_state) }}
                 </el-tag>
-                <span class="cell-sub" :title="row.visible_warning || '-'">{{ row.visible_warning || 'No active warning' }}</span>
+                <span class="cell-sub" :title="row.visible_warning || '-'">{{ row.visible_warning || '当前无额外告警' }}</span>
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="Recent Activity" width="144" align="center">
+          <el-table-column label="近期活动" width="144" align="center">
             <template #default="{ row }">
               <div class="cell-stack source-ops-table__metric">
                 <span>{{ row.recent_incident_count }}</span>
@@ -1394,28 +1628,73 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="Latest Sync" min-width="240">
+          <el-table-column label="最近同步" min-width="240">
             <template #default="{ row }">
               <div class="cell-stack">
                 <div class="source-sync-line">
                   <el-tag size="small" :type="sourceSyncResultTagType(row.latest_sync_attempt?.result_status || row.last_sync_status)">
-                    {{ row.latest_sync_attempt?.result_status || row.last_sync_status || 'none' }}
+                    {{ sourceSyncResultLabel(row.latest_sync_attempt?.result_status || row.last_sync_status) }}
                   </el-tag>
                   <span class="cell-sub">{{ fmtTableDateTime(row.last_synced_at || row.latest_sync_attempt?.started_at) }}</span>
                 </div>
                 <span class="cell-sub" :title="row.latest_sync_attempt?.detail || row.last_sync_detail || '-'">
-                  {{ row.latest_sync_attempt?.detail || row.last_sync_detail || 'Awaiting first sync' }}
+                  {{ row.latest_sync_attempt?.detail || row.last_sync_detail || '等待首次同步' }}
                 </span>
               </div>
             </template>
           </el-table-column>
-          <el-table-column label="Actions" width="176" align="center">
+          <el-table-column label="规则包预览" min-width="220">
+            <template #default="{ row }">
+              <div class="cell-stack">
+                <div class="source-sync-line" v-if="row.latest_package_preview">
+                  <el-tag size="small" :type="packageVersionStateTagType(row.latest_package_preview.version_change_state)">
+                    {{ packageVersionStateLabel(row.latest_package_preview.version_change_state) }}
+                  </el-tag>
+                  <span class="cell-sub">{{ row.latest_package_preview.package_version || '-' }}</span>
+                </div>
+                <div v-if="row.recent_package_intakes?.length" class="source-sync-line">
+                  <el-tag size="small" :type="packageIntakeResultTagType(row.recent_package_intakes[0].intake_result)">
+                    {{ packageIntakeResultLabel(row.recent_package_intakes[0].intake_result) }}
+                  </el-tag>
+                  <el-tag
+                    size="small"
+                    :type="sourceTrustClassificationTagType(row.recent_package_intakes[0].trust_classification)"
+                  >
+                    {{ sourceTrustClassificationLabel(row.recent_package_intakes[0].trust_classification) }}
+                  </el-tag>
+                </div>
+                <span class="cell-sub" :title="row.latest_package_preview?.visible_warning || '-'">
+                  {{ row.latest_package_preview?.visible_warning || '暂无新的规则包预览告警' }}
+                </span>
+                <span
+                  v-if="row.recent_package_intakes?.[0]?.trust_classification === 'demo_test'"
+                  class="cell-sub"
+                >
+                  演示 / 测试规则包仅保留可见记录，不允许作为受信覆盖激活。
+                </span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="228" align="center">
             <template #default="{ row }">
               <div class="ids-ops ids-ops--row">
-                <button type="button" class="ids-act ids-act--primary" @click="openSourceEditDialog(row)">Edit</button>
+                <button type="button" class="ids-act ids-act--primary" @click="openSourceEditDialog(row)">编辑</button>
+                <span class="ids-ops__sep" aria-hidden="true">|</span>
+                <button type="button" class="ids-act" @click="openPackagePreviewDialog(row)">预览</button>
+                <span class="ids-ops__sep" aria-hidden="true">|</span>
+                <button type="button" class="ids-act ids-act--muted" @click="openPackageHistoryDialog(row)">历史</button>
+                <span class="ids-ops__sep" aria-hidden="true">|</span>
+                <button
+                  type="button"
+                  class="ids-act ids-act--ok"
+                  :disabled="!canActivatePackageIntake(row.recent_package_intakes?.[0]) || (packageActivating && packageActivatingSourceId === row.id)"
+                  @click="openPackageActivationDialog(row)"
+                >
+                  {{ packageActivating && packageActivatingSourceId === row.id ? '激活中...' : '激活' }}
+                </button>
                 <span class="ids-ops__sep" aria-hidden="true">|</span>
                 <button type="button" class="ids-act" :disabled="sourceSyncingId === row.id" @click="runSourceSync(row)">
-                  {{ sourceSyncingId === row.id ? 'Syncing...' : 'Run Sync' }}
+                  {{ sourceSyncingId === row.id ? '同步中...' : '执行同步' }}
                 </button>
               </div>
             </template>
@@ -1642,59 +1921,305 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
     </main>
 
     <el-dialog
-      v-model="sourceDialogVisible"
-      :title="editingSourceId ? 'Edit Source' : 'Add Source'"
+      v-model="packagePreviewDialogVisible"
+      title="预览受信规则包"
       width="640px"
       destroy-on-close
     >
       <el-form label-width="160px" class="source-form-grid">
-        <el-form-item label="Source Key">
+        <el-form-item label="规则源标识">
+          <el-input v-model="packagePreviewForm.source_key" placeholder="suricata-web-prod" />
+        </el-form-item>
+        <el-form-item label="规则包版本">
+          <el-input v-model="packagePreviewForm.package_version" placeholder="2026.04" />
+        </el-form-item>
+        <el-form-item label="信任级别">
+          <el-select v-model="packagePreviewForm.trust_classification" class="sec-select">
+            <el-option label="成熟外部规则" value="external_mature" />
+            <el-option label="项目自定义规则" value="custom_project" />
+            <el-option label="过渡本地规则" value="transitional_local" />
+            <el-option label="演示 / 测试" value="demo_test" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="检测家族">
+          <el-select v-model="packagePreviewForm.detector_family" class="sec-select">
+            <el-option label="网络" value="network" />
+            <el-option label="网页" value="web" />
+            <el-option label="文件" value="file" />
+            <el-option label="日志" value="log" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="触发人">
+          <el-input v-model="packagePreviewForm.triggered_by" placeholder="system_admin" />
+        </el-form-item>
+        <el-form-item label="来源说明">
+          <el-input
+            v-model="packagePreviewForm.provenance_note"
+            type="textarea"
+            :rows="4"
+            placeholder="填写规则包来源、审阅说明或可信依据。"
+          />
+        </el-form-item>
+      </el-form>
+      <div v-if="latestPackagePreviewResult" class="detail-section">
+        <div class="detail-section__title">最新预览结果</div>
+        <div class="detail-tags">
+          <el-tag size="small" :type="packageVersionStateTagType(latestPackagePreviewResult.version_change_state)">
+            {{ packageVersionStateLabel(latestPackagePreviewResult.version_change_state) }}
+          </el-tag>
+          <el-tag size="small" type="info">{{ latestPackagePreviewResult.package_version }}</el-tag>
+        </div>
+        <div class="detail-grid">
+          <div class="detail-item">
+            <span class="detail-label">规则源标识</span>
+            <span class="detail-value detail-value--mono">{{ latestPackagePreviewResult.source_key }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">变更字段</span>
+            <span class="detail-value">{{ latestPackagePreviewResult.changed_fields?.join('、') || '无' }}</span>
+          </div>
+          <div class="detail-item detail-item--full">
+            <span class="detail-label">风险提示</span>
+            <span class="detail-value">{{ latestPackagePreviewResult.visible_warning || '暂无额外提示' }}</span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="packagePreviewDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="packagePreviewing" @click="submitPackagePreview">执行预览</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="sourceDialogVisible"
+      :title="editingSourceId ? '编辑规则源' : '新增规则源'"
+      width="640px"
+      destroy-on-close
+    >
+      <el-form label-width="160px" class="source-form-grid">
+        <el-form-item label="规则源标识">
           <el-input v-model="sourceForm.source_key" placeholder="suricata-web-prod" />
         </el-form-item>
-        <el-form-item label="Display Name">
-          <el-input v-model="sourceForm.display_name" placeholder="Suricata Web Rules" />
+        <el-form-item label="显示名称">
+            <el-input v-model="sourceForm.display_name" placeholder="Suricata Web 规则" />
         </el-form-item>
-        <el-form-item label="Trust Classification">
+        <el-form-item label="信任级别">
           <el-select v-model="sourceForm.trust_classification" class="sec-select" @change="applySourceTrustDefaults">
-            <el-option label="Mature External" value="external_mature" />
-            <el-option label="Custom Project" value="custom_project" />
-            <el-option label="Transitional Local" value="transitional_local" />
-            <el-option label="Demo / Test" value="demo_test" />
+            <el-option label="成熟外部规则" value="external_mature" />
+            <el-option label="项目自定义规则" value="custom_project" />
+            <el-option label="过渡本地规则" value="transitional_local" />
+            <el-option label="演示 / 测试" value="demo_test" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Detector Family">
+        <el-form-item label="检测家族">
           <el-select v-model="sourceForm.detector_family" class="sec-select">
-            <el-option label="Network" value="network" />
-            <el-option label="Web" value="web" />
-            <el-option label="File" value="file" />
-            <el-option label="Log" value="log" />
+            <el-option label="网络" value="network" />
+            <el-option label="网页" value="web" />
+            <el-option label="文件" value="file" />
+            <el-option label="日志" value="log" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Operational Status">
+        <el-form-item label="运行状态">
           <el-select v-model="sourceForm.operational_status" class="sec-select">
-            <el-option label="Enabled" value="enabled" />
-            <el-option label="Disabled" value="disabled" />
-            <el-option label="Failing" value="failing" />
-            <el-option label="Draft" value="draft" />
+            <el-option label="启用" value="enabled" />
+            <el-option label="停用" value="disabled" />
+            <el-option label="异常" value="failing" />
+            <el-option label="草稿" value="draft" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Freshness Target (hours)">
+        <el-form-item label="新鲜度目标（小时）">
           <el-input-number v-model="sourceForm.freshness_target_hours" :min="1" :max="720" />
         </el-form-item>
-        <el-form-item label="Sync Mode">
+        <el-form-item label="同步方式">
           <el-select v-model="sourceForm.sync_mode" class="sec-select">
-            <el-option label="Manual" value="manual" />
-            <el-option label="Scheduled" value="scheduled" />
-            <el-option label="N/A" value="not_applicable" />
+            <el-option label="手动" value="manual" />
+            <el-option label="定时" value="scheduled" />
+            <el-option label="不适用" value="not_applicable" />
           </el-select>
         </el-form-item>
-        <el-form-item label="Provenance Note">
-          <el-input v-model="sourceForm.provenance_note" type="textarea" :rows="4" placeholder="Why this source is trusted or why it stays demo/test only." />
+        <el-form-item label="来源说明">
+          <el-input v-model="sourceForm.provenance_note" type="textarea" :rows="4" placeholder="说明该规则源为何可信，或为何仅作为演示 / 测试保留。" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="sourceDialogVisible = false">Cancel</el-button>
-        <el-button type="primary" :loading="sourceSaving" @click="saveSource">Save</el-button>
+        <el-button @click="sourceDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="sourceSaving" @click="saveSource">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="packageActivationDialogVisible"
+      title="激活已审阅规则包"
+      width="560px"
+      destroy-on-close
+      @closed="resetPackageActivationForm"
+    >
+      <el-form label-width="160px" class="source-form-grid">
+        <div v-if="packageActivationTarget" class="detail-section">
+          <div class="detail-section__title">本次激活对象</div>
+          <div class="detail-tags">
+            <el-tag size="small" :type="packageIntakeResultTagType(packageActivationTarget.intake.intake_result)">
+              {{ packageIntakeResultLabel(packageActivationTarget.intake.intake_result) }}
+            </el-tag>
+            <el-tag size="small" :type="sourceTrustClassificationTagType(packageActivationTarget.intake.trust_classification)">
+              {{ sourceTrustClassificationLabel(packageActivationTarget.intake.trust_classification) }}
+            </el-tag>
+            <el-tag size="small" type="info">{{ packageActivationTarget.intake.package_version }}</el-tag>
+          </div>
+          <div class="detail-grid">
+            <div class="detail-item">
+              <span class="detail-label">规则源</span>
+              <span class="detail-value">{{ packageActivationTarget.displayName }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">规则源标识</span>
+              <span class="detail-value detail-value--mono">{{ packageActivationTarget.sourceKey }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">预览时间</span>
+              <span class="detail-value">{{ fmtTableDateTime(packageActivationTarget.intake.created_at) }}</span>
+            </div>
+            <div class="detail-item detail-item--full">
+              <span class="detail-label">预览说明</span>
+              <span class="detail-value">{{ packageActivationTarget.intake.intake_detail || '暂无预览说明' }}</span>
+            </div>
+          </div>
+        </div>
+        <el-form-item label="规则包记录 ID">
+          <el-input v-model="packageActivationForm.package_intake_id" disabled />
+        </el-form-item>
+        <el-form-item label="触发人">
+          <el-input v-model="packageActivationForm.triggered_by" placeholder="system_admin" />
+        </el-form-item>
+        <el-form-item label="激活说明">
+          <el-input
+            v-model="packageActivationForm.activation_note"
+            type="textarea"
+            :rows="4"
+            placeholder="填写本次激活依据，例如：审阅通过后激活。"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="closePackageActivationDialog">取消</el-button>
+        <el-button type="primary" :loading="packageActivating" @click="submitPackageActivation">确认激活</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="packageHistoryDialogVisible"
+      title="规则包历史"
+      width="760px"
+      destroy-on-close
+    >
+      <div v-loading="packageHistoryLoading">
+        <template v-if="packageHistory">
+          <div class="detail-section">
+            <div class="detail-section__title">当前规则包状态</div>
+            <div class="detail-tags">
+              <el-tag size="small" :type="sourceTrustClassificationTagType(packageHistory.source?.trust_classification)">
+                {{ sourceTrustClassificationLabel(packageHistory.source?.trust_classification) }}
+              </el-tag>
+              <el-tag size="small" type="info">
+                {{ packageHistory.active_package_version || '暂无激活规则包' }}
+              </el-tag>
+            </div>
+            <div class="detail-grid">
+              <div class="detail-item">
+                <span class="detail-label">规则源</span>
+                <span class="detail-value">{{ packageHistory.source?.display_name || packageHistory.source_key }}</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">规则源标识</span>
+                <span class="detail-value detail-value--mono">{{ packageHistory.source_key }}</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">最近激活时间</span>
+                <span class="detail-value">{{ fmtTableDateTime(packageHistory.active_package_activated_at) }}</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">最近激活人</span>
+                <span class="detail-value">{{ packageHistory.active_package_activated_by || '-' }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <div class="detail-section__title">近期规则包接入记录</div>
+            <el-table :data="packageHistory.recent_intakes" size="small" style="width: 100%">
+              <el-table-column label="版本" min-width="128">
+                <template #default="{ row }">
+                  <div class="cell-stack">
+                    <span class="cell-mono">{{ row.package_version || '-' }}</span>
+                    <span class="cell-sub">{{ fmtTableDateTime(row.created_at) }}</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="144">
+                <template #default="{ row }">
+                  <div class="cell-stack">
+                    <el-tag size="small" :type="packageHistoryStateTagType(row, null)">
+                      {{ packageHistoryStateLabel(row, null) }}
+                    </el-tag>
+                    <el-tag size="small" :type="sourceTrustClassificationTagType(row.trust_classification)">
+                      {{ sourceTrustClassificationLabel(row.trust_classification) }}
+                    </el-tag>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作人" width="128">
+                <template #default="{ row }">
+                  <span>{{ row.triggered_by || '-' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="说明" min-width="260">
+                <template #default="{ row }">
+                  <span class="cell-sub">{{ row.intake_detail || '暂无接入说明' }}</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <div class="detail-section">
+            <div class="detail-section__title">近期激活记录</div>
+            <el-table :data="packageHistory.recent_activations" size="small" style="width: 100%">
+              <el-table-column label="版本" min-width="128">
+                <template #default="{ row }">
+                  <div class="cell-stack">
+                    <span class="cell-mono">{{ row.package_version || '-' }}</span>
+                    <span class="cell-sub">{{ fmtTableDateTime(row.activated_at) }}</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="120">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="packageHistoryStateTagType(null, row)">
+                    {{ packageHistoryStateLabel(null, row) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作人" width="128">
+                <template #default="{ row }">
+                  <span>{{ row.activated_by || '-' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="说明" min-width="260">
+                <template #default="{ row }">
+                  <span class="cell-sub">{{ row.activation_detail || '暂无激活说明' }}</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div v-if="!packageHistory.recent_activations.length" class="detail-value">
+              暂无激活历史记录。
+            </div>
+          </div>
+        </template>
+        <div v-else class="detail-value">
+          当前规则源暂无规则包历史。
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="packageHistoryDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
 
@@ -2625,6 +3150,11 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
   flex-direction: column;
   gap: 16px;
   margin-bottom: 18px;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  background:
+    radial-gradient(circle at top left, rgba(34, 211, 238, 0.08), transparent 38%),
+    linear-gradient(180deg, rgba(7, 14, 28, 0.92), rgba(6, 12, 24, 0.78));
+  box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.08);
 }
 
 .source-ops-card__header {
@@ -2634,11 +3164,19 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
   gap: 16px;
 }
 
+.source-ops-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
 .source-ops-card__subtitle {
   margin-top: 6px;
   font-size: 13px;
   line-height: 1.5;
-  color: rgba(255, 255, 255, 0.62);
+  max-width: 520px;
+  color: rgba(226, 232, 240, 0.76);
 }
 
 .source-summary-grid {
@@ -2654,7 +3192,8 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
   padding: 14px 16px;
   border: 1px solid rgba(34, 211, 238, 0.12);
   border-radius: 12px;
-  background: rgba(15, 23, 42, 0.5);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.46));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .source-summary-tile--good {
@@ -2678,7 +3217,6 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
 .source-summary-tile__label {
   font-size: 12px;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: rgba(255, 255, 255, 0.52);
 }
 
@@ -2698,6 +3236,28 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
 
 .source-form-grid :deep(.el-input-number) {
   width: 100%;
+}
+
+@media (max-width: 1280px) {
+  .source-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .source-ops-card__header {
+    flex-direction: column;
+  }
+
+  .source-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .source-summary-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .muted-ai {

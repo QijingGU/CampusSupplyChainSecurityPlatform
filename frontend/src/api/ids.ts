@@ -79,7 +79,8 @@ export interface IDSTrendResponse {
   counts: number[]
 }
 
-// Source operations payloads for the IDS security-center registry panel.
+// Source operations and package-history payloads for the IDS security-center
+// registry panel.
 export interface IDSSourceSyncAttemptItem {
   id: number
   source_id: number
@@ -89,6 +90,30 @@ export interface IDSSourceSyncAttemptItem {
   detail: string
   freshness_after_sync: string
   triggered_by: string
+}
+
+export interface IDSSourcePackageIntakeItem {
+  id: number
+  source_id: number | null
+  source_key: string
+  package_version: string
+  release_timestamp: string | null
+  trust_classification: string
+  detector_family: string
+  provenance_note: string
+  intake_result: string
+  intake_detail: string
+  triggered_by: string
+  created_at: string | null
+}
+
+export interface IDSSourcePackagePreviewItem {
+  source_id: number
+  source_key: string
+  package_version: string
+  version_change_state: string
+  changed_fields: string[]
+  visible_warning: string
 }
 
 export interface IDSSourceItem {
@@ -113,6 +138,11 @@ export interface IDSSourceItem {
   updated_at: string | null
   latest_sync_attempt?: IDSSourceSyncAttemptItem | null
   recent_sync_attempts: IDSSourceSyncAttemptItem[]
+  active_package_version?: string
+  active_package_activated_at?: string | null
+  active_package_activated_by?: string
+  latest_package_preview?: IDSSourcePackagePreviewItem | null
+  recent_package_intakes: IDSSourcePackageIntakeItem[]
 }
 
 export interface IDSSourceListResponse {
@@ -148,6 +178,68 @@ export interface IDSSourceSyncResponse {
   source: IDSSourceItem
 }
 
+export interface IDSSourcePackagePreviewPayload {
+  source_key: string
+  package_version: string
+  release_timestamp?: string
+  trust_classification: string
+  detector_family: string
+  provenance_note?: string
+  triggered_by: string
+}
+
+export interface IDSSourcePackagePreviewResponse extends IDSSourcePackagePreviewItem {
+  package_intake_id: number
+  intake_result: string
+}
+
+export interface IDSSourcePackageActivationPayload {
+  package_intake_id: number
+  triggered_by: string
+  activation_note?: string
+}
+
+export interface IDSSourcePackageActivationResponse {
+  source_id: number
+  package_activation_id: number
+  package_version: string
+  result_status: string
+  active_package_version: string
+  detail: string
+}
+
+export interface IDSSourcePackageActivationItem {
+  id: number
+  source_id: number
+  package_intake_id: number
+  package_version: string
+  activated_at: string | null
+  activated_by: string
+  activation_detail: string
+  created_at: string | null
+}
+
+export interface IDSSourcePackageHistoryItem {
+  source: {
+    id: number
+    source_key: string
+    display_name: string
+    trust_classification: string
+    detector_family: string
+  } | null
+  source_key: string
+  active_package_version: string
+  active_package_activated_at: string | null
+  active_package_activated_by: string
+  recent_intakes: IDSSourcePackageIntakeItem[]
+  recent_activations: IDSSourcePackageActivationItem[]
+}
+
+export interface IDSSourcePackageHistoryResponse {
+  total: number
+  items: IDSSourcePackageHistoryItem[]
+}
+
 export function getIDSTrend(
   days?: number,
   params?: { event_origin?: string; source_classification?: string },
@@ -171,6 +263,18 @@ export function updateIDSSource(sourceId: number, data: IDSSourceRegistryPayload
 
 export function syncIDSSource(sourceId: number, data: { triggered_by: string; reason?: string }) {
   return request.post<IDSSourceSyncResponse>(`/ids/sources/${sourceId}/sync`, data)
+}
+
+export function previewIDSSourcePackage(data: IDSSourcePackagePreviewPayload) {
+  return request.post<IDSSourcePackagePreviewResponse>('/ids/source-packages/preview', data)
+}
+
+export function activateIDSSourcePackage(data: IDSSourcePackageActivationPayload) {
+  return request.post<IDSSourcePackageActivationResponse>('/ids/source-packages/activate', data)
+}
+
+export function listIDSSourcePackages(params?: { source_id?: number; source_key?: string; limit?: number }) {
+  return request.get<IDSSourcePackageHistoryResponse>('/ids/source-packages', { params })
 }
 
 export function archiveIDSEvent(eventId: number) {
