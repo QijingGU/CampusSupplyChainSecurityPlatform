@@ -283,6 +283,8 @@ security-center workflows change.
   - verified a `demo_test` package preview succeeds for review but leaves the
     `激活` action unavailable in the UI, preserving the trusted active package
     version instead of overwriting it.
-- Remaining gaps for `003`:
-  - reviewable commit/push work (`T021`) is still pending after the final
-    validation pass.
+- Delivery for the current `003` slice:
+  - marked `T021` complete after preparing the reviewable commit
+    `c405c79 feat: complete ids source package intake workflow`,
+  - pushed `security-center/feature-ids` to GitHub so the branch is ready for a
+    PR into `security-center/collab-setup`.

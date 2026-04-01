@@ -98,7 +98,7 @@ details.
 
 - [X] T019 [P] Clean up stale package-intake wording and transitional comments across backend/app/api/ids.py, backend/app/services/ids_source_packages.py, and frontend/src/api/ids.ts
 - [X] T020 Run the API-level and UI-level validation flow in specs/003-ids-source-package-intake/quickstart.md and capture results in docs/ids-changelog.md
-- [ ] T021 Prepare a reviewable commit and push current work to origin security-center/feature-ids
+- [X] T021 Prepare a reviewable commit and push current work to origin security-center/feature-ids
 
 ---
 
