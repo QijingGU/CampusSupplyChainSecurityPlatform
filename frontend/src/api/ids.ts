@@ -3,6 +3,18 @@ import request from './request'
 export interface IDSEventItem {
   id: number
   client_ip: string
+  event_origin?: string
+  event_origin_label?: string
+  source_classification?: string
+  detector_family?: string
+  detector_name?: string
+  source_rule_id?: string
+  source_rule_name?: string
+  source_version?: string
+  source_freshness?: string
+  event_fingerprint?: string
+  correlation_key?: string
+  counted_in_real_metrics?: boolean
   attack_type: string
   attack_type_label: string
   signature_matched: string
@@ -17,6 +29,8 @@ export interface IDSEventItem {
   status?: string
   review_note?: string
   action_taken?: string
+  response_result?: string
+  response_detail?: string
   risk_score?: number
   confidence?: number
   hit_count?: number
@@ -38,6 +52,7 @@ export interface IDSStatsResponse {
   high_risk_count?: number
   by_type: { attack_type: string; attack_type_label: string; count: number }[]
   by_status?: { status: string; count: number }[]
+  by_origin?: { event_origin: string; count: number }[]
 }
 
 export function listIDSEvents(params?: {
@@ -46,6 +61,8 @@ export function listIDSEvents(params?: {
   blocked?: number
   archived?: number
   status?: string
+  event_origin?: string
+  source_classification?: string
   min_score?: number
   limit?: number
   offset?: number
@@ -53,8 +70,8 @@ export function listIDSEvents(params?: {
   return request.get<IDSEventsResponse>('/ids/events', { params })
 }
 
-export function getIDSStats() {
-  return request.get<IDSStatsResponse>('/ids/stats')
+export function getIDSStats(params?: { event_origin?: string; source_classification?: string }) {
+  return request.get<IDSStatsResponse>('/ids/stats', { params })
 }
 
 export interface IDSTrendResponse {
@@ -62,8 +79,13 @@ export interface IDSTrendResponse {
   counts: number[]
 }
 
-export function getIDSTrend(days?: number) {
-  return request.get<IDSTrendResponse>('/ids/stats/trend', { params: { days: days ?? 7 } })
+export function getIDSTrend(
+  days?: number,
+  params?: { event_origin?: string; source_classification?: string },
+) {
+  return request.get<IDSTrendResponse>('/ids/stats/trend', {
+    params: { days: days ?? 7, ...params },
+  })
 }
 
 export function archiveIDSEvent(eventId: number) {
@@ -105,6 +127,7 @@ export function getIDSEventReport(eventId: number, forceAI?: boolean) {
 }
 
 /** 主标题彩蛋：多向量并发攻击聚合研判报告 */
+// Aggregate report for the seeded phase1 demo chain.
 export function getIDSPhase1AggregateReport() {
   return request.get<{ report: any }>('/ids/demo/phase1/aggregate-report')
 }

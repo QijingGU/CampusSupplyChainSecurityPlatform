@@ -1,9 +1,14 @@
 """IDS 引擎：特征匹配、风险评分、攻击识别、Windows 防火墙封禁。"""
+"""IDS detection engine for in-process request matching and firewall actions."""
+
 import re
 import json
 import subprocess
 import platform
 from urllib.parse import unquote
+
+# Transitional local matcher retained for continuity until mature-source
+# integrations become the primary detector input.
 
 # 攻击特征库（正则）
 SIGNATURES: list[tuple[str, str, int]] = [

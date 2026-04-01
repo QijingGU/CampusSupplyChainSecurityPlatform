@@ -1,17 +1,31 @@
-"""IDS 管理 API：管理员查看事件、处置、报告、统计。"""
+"""IDS management API for review, reporting, and demo workflows."""
+from __future__ import annotations
+
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, Query, HTTPException
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from ..api.deps import require_roles
+from ..config import settings
 from ..database import get_db
 from ..models.ids_event import IDSEvent
-from ..api.deps import require_roles
-from ..services.ids_ai_analysis import run_ai_analysis_sync, is_llm_available
+from ..services.ids_ai_analysis import is_llm_available, run_ai_analysis_sync
 from ..services.ids_engine import block_ip_windows, unblock_ip_windows
-from ..config import settings
+from ..services.ids_ingestion import (
+    DEMO_EVENT_ORIGIN,
+    REAL_EVENT_ORIGIN,
+    SOURCE_CUSTOM_PROJECT,
+    SOURCE_EXTERNAL_MATURE,
+    SOURCE_TRANSITIONAL_LOCAL,
+    TEST_EVENT_ORIGIN,
+    apply_source_metadata,
+    build_correlation_key,
+    build_event_fingerprint,
+)
 
 router = APIRouter(prefix="/ids", tags=["ids"])
 _admin = require_roles("system_admin")
@@ -30,6 +44,36 @@ class DemoSeedRequest(BaseModel):
     auto_analyze: bool = True
 
 
+class IngestRawEvidence(BaseModel):
+    method: str = ""
+    path: str = ""
+    query_snippet: str = ""
+    body_snippet: str = ""
+    user_agent: str = ""
+    headers_snippet: str = ""
+
+
+class IngestEventRequest(BaseModel):
+    event_origin: str
+    source_classification: str
+    detector_family: str
+    detector_name: str
+    rule_id: str = ""
+    rule_name: str = ""
+    source_version: str = ""
+    source_freshness: str = "unknown"
+    occurred_at: datetime
+    client_ip: str
+    asset_ref: str = ""
+    attack_type: str
+    severity: str = "medium"
+    confidence: int = Field(..., ge=0, le=100)
+    event_fingerprint: str = ""
+    correlation_key: str = ""
+    evidence_summary: str = ""
+    raw_evidence: IngestRawEvidence | None = None
+
+
 @router.get("/events")
 def list_ids_events(
     attack_type: str | None = Query(None),
@@ -37,117 +81,217 @@ def list_ids_events(
     blocked: int | None = Query(None),
     archived: int | None = Query(None),
     status: str | None = Query(None),
+    event_origin: str | None = Query(None),
+    source_classification: str | None = Query(None),
     min_score: int | None = Query(None, ge=0, le=100),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    """管理员：查询 IDS 事件列表"""
-    q = db.query(IDSEvent).order_by(IDSEvent.created_at.desc())
-    if attack_type:
-        q = q.filter(IDSEvent.attack_type == attack_type)
-    if client_ip:
-        q = q.filter(IDSEvent.client_ip.contains(client_ip))
-    if blocked is not None:
-        q = q.filter(IDSEvent.blocked == blocked)
-    if archived is not None:
-        q = q.filter(IDSEvent.archived == archived)
-    if status:
-        q = q.filter(IDSEvent.status == status)
-    if min_score is not None:
-        q = q.filter(IDSEvent.risk_score >= min_score)
+    q = _filtered_ids_query(
+        db,
+        attack_type=attack_type,
+        client_ip=client_ip,
+        blocked=blocked,
+        archived=archived,
+        status=status,
+        event_origin=event_origin,
+        source_classification=source_classification,
+        min_score=min_score,
+    ).order_by(IDSEvent.created_at.desc())
 
     total = q.count()
     rows = q.offset(offset).limit(limit).all()
-    return {
-        "total": total,
-        "items": [
-            {
-                "id": r.id,
-                "client_ip": r.client_ip,
-                "attack_type": r.attack_type,
-                "attack_type_label": _attack_type_label(r.attack_type),
-                "signature_matched": r.signature_matched,
-                "method": r.method,
-                "path": r.path,
-                "query_snippet": (r.query_snippet or "")[:200],
-                "body_snippet": (r.body_snippet or "")[:200],
-                "user_agent": (r.user_agent or "")[:200],
-                "blocked": r.blocked,
-                "firewall_rule": r.firewall_rule or "",
-                "archived": r.archived,
-                "status": (r.status or "new"),
-                "review_note": (r.review_note or "")[:500],
-                "action_taken": r.action_taken or "",
-                "risk_score": int(r.risk_score or 0),
-                "confidence": int(r.confidence or 0),
-                "hit_count": int(r.hit_count or 0),
-                "created_at": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else None,
-                "ai_risk_level": (r.ai_risk_level or "") if hasattr(r, "ai_risk_level") else "",
-                "ai_analysis": (r.ai_analysis or "")[:2000] if hasattr(r, "ai_analysis") else "",
-                "ai_confidence": int(getattr(r, "ai_confidence", 0) or 0),
-                "ai_analyzed_at": r.ai_analyzed_at.strftime("%Y-%m-%d %H:%M:%S")
-                if getattr(r, "ai_analyzed_at", None)
-                else None,
-            }
-            for r in rows
-        ],
-    }
+    return {"total": total, "items": [_serialize_ids_event(row) for row in rows]}
 
 
 @router.get("/stats")
 def ids_stats(
+    event_origin: str | None = Query(None),
+    source_classification: str | None = Query(None),
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    """管理员：IDS 统计"""
-    total = db.query(IDSEvent).count()
-    blocked_count = db.query(IDSEvent).filter(IDSEvent.blocked == 1).count()
+    q = _filtered_ids_query(
+        db,
+        event_origin=event_origin,
+        source_classification=source_classification,
+    )
+    total = q.count()
+    blocked_count = q.filter(IDSEvent.blocked == 1).count()
+    high_risk_count = q.filter(IDSEvent.risk_score >= 70).count()
     by_type = (
-        db.query(IDSEvent.attack_type, func.count(IDSEvent.id).label("cnt"))
+        q.with_entities(IDSEvent.attack_type, func.count(IDSEvent.id).label("cnt"))
         .group_by(IDSEvent.attack_type)
         .all()
     )
     by_status = (
-        db.query(IDSEvent.status, func.count(IDSEvent.id).label("cnt"))
+        q.with_entities(IDSEvent.status, func.count(IDSEvent.id).label("cnt"))
         .group_by(IDSEvent.status)
         .all()
     )
-    high_risk_count = db.query(IDSEvent).filter(IDSEvent.risk_score >= 70).count()
+    by_origin = (
+        q.with_entities(IDSEvent.event_origin, func.count(IDSEvent.id).label("cnt"))
+        .group_by(IDSEvent.event_origin)
+        .all()
+    )
     return {
         "total": total,
         "blocked_count": blocked_count,
         "high_risk_count": high_risk_count,
         "by_type": [
-            {"attack_type": t, "attack_type_label": _attack_type_label(t), "count": c}
-            for t, c in by_type
+            {"attack_type": attack_type, "attack_type_label": _attack_type_label(attack_type), "count": count}
+            for attack_type, count in by_type
         ],
-        "by_status": [{"status": s or "new", "count": c} for s, c in by_status],
+        "by_status": [{"status": status or "new", "count": count} for status, count in by_status],
+        "by_origin": [{"event_origin": origin or REAL_EVENT_ORIGIN, "count": count} for origin, count in by_origin],
     }
 
 
 @router.get("/stats/trend")
 def ids_stats_trend(
     days: int = Query(7, ge=1, le=90),
+    event_origin: str | None = Query(None),
+    source_classification: str | None = Query(None),
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    """管理员：IDS 事件时间趋势（按天）"""
     start = datetime.utcnow() - timedelta(days=days)
-    rows = db.query(IDSEvent).filter(IDSEvent.created_at >= start).all()
+    rows = (
+        _filtered_ids_query(
+            db,
+            event_origin=event_origin,
+            source_classification=source_classification,
+        )
+        .filter(IDSEvent.created_at >= start)
+        .all()
+    )
+
     by_date: dict[str, int] = defaultdict(int)
-    for r in rows:
-        if r.created_at:
-            dt = r.created_at.strftime("%Y-%m-%d")
-            by_date[dt] += 1
+    for row in rows:
+        if row.created_at:
+            by_date[row.created_at.strftime("%Y-%m-%d")] += 1
+
     dates: list[str] = []
     counts: list[int] = []
-    for i in range(days):
-        d = (datetime.utcnow() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
-        dates.append(d)
-        counts.append(by_date.get(d, 0))
+    for idx in range(days):
+        day = (datetime.utcnow() - timedelta(days=days - 1 - idx)).strftime("%Y-%m-%d")
+        dates.append(day)
+        counts.append(by_date.get(day, 0))
     return {"dates": dates, "counts": counts}
+
+
+@router.post("/events/ingest")
+def ingest_ids_event(
+    req: IngestEventRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    # Keep external, demo, and transitional signals on one normalized contract.
+    allowed_origins = {REAL_EVENT_ORIGIN, DEMO_EVENT_ORIGIN, TEST_EVENT_ORIGIN}
+    allowed_sources = {
+        SOURCE_EXTERNAL_MATURE,
+        SOURCE_CUSTOM_PROJECT,
+        SOURCE_TRANSITIONAL_LOCAL,
+    }
+    event_origin = (req.event_origin or "").strip()
+    source_classification = (req.source_classification or "").strip()
+    detector_family = (req.detector_family or "").strip()
+    detector_name = (req.detector_name or "").strip()
+    attack_type = (req.attack_type or "").strip()
+
+    if event_origin not in allowed_origins:
+        raise HTTPException(status_code=400, detail=f"Invalid event_origin: {event_origin}")
+    if source_classification not in allowed_sources:
+        raise HTTPException(status_code=400, detail=f"Invalid source_classification: {source_classification}")
+    if not detector_family or not detector_name or not attack_type:
+        raise HTTPException(status_code=400, detail="detector_family, detector_name, and attack_type are required")
+    if event_origin in {REAL_EVENT_ORIGIN, DEMO_EVENT_ORIGIN} and not (req.event_fingerprint or "").strip():
+        raise HTTPException(status_code=400, detail="event_fingerprint is required for real and demo events")
+    if req.raw_evidence is None and not (req.evidence_summary or "").strip():
+        raise HTTPException(status_code=400, detail="evidence_summary is required when raw_evidence is omitted")
+
+    raw_evidence = req.raw_evidence or IngestRawEvidence()
+    method = (raw_evidence.method or "").strip().upper()
+    path = (raw_evidence.path or req.asset_ref or "").strip()
+    event_fingerprint = (
+        (req.event_fingerprint or "").strip()
+        or build_event_fingerprint(req.client_ip, method, path, attack_type, req.rule_id)
+    )
+    correlation_key = (
+        (req.correlation_key or "").strip()
+        or build_correlation_key(req.occurred_at, req.client_ip, attack_type, detector_name)
+    )
+    matched = _find_correlated_ingested_event(
+        db,
+        event_origin=event_origin,
+        event_fingerprint=event_fingerprint,
+        correlation_key=correlation_key,
+        occurred_at=req.occurred_at,
+    )
+
+    if matched:
+        _merge_ingested_event(
+            matched,
+            req=req,
+            raw_evidence=raw_evidence,
+            event_fingerprint=event_fingerprint,
+            correlation_key=correlation_key,
+        )
+        db.commit()
+        db.refresh(matched)
+        incident = matched
+    else:
+        incident = IDSEvent(
+            client_ip=(req.client_ip or "")[:64],
+            attack_type=attack_type,
+            signature_matched=((req.rule_name or req.rule_id or req.evidence_summary or attack_type)[:128]),
+            method=method[:16],
+            path=path[:512],
+            query_snippet=(raw_evidence.query_snippet or "")[:500],
+            body_snippet=(raw_evidence.body_snippet or "")[:500],
+            user_agent=(raw_evidence.user_agent or "")[:512],
+            headers_snippet=(raw_evidence.headers_snippet or "")[:1000],
+            blocked=0,
+            firewall_rule="",
+            archived=0,
+            status="new",
+            review_note="",
+            action_taken=f"ingested::{source_classification}",
+            response_result="record_only",
+            response_detail=((req.evidence_summary or "normalized_ingest")[:1000]),
+            risk_score=_severity_to_risk_score(req.severity, req.confidence),
+            confidence=int(req.confidence or 0),
+            hit_count=1,
+            detect_detail=_build_ingested_detect_detail(req, raw_evidence),
+        )
+        incident.created_at = req.occurred_at
+        apply_source_metadata(
+            incident,
+            event_origin=event_origin,
+            source_classification=source_classification,
+            detector_family=detector_family,
+            detector_name=detector_name,
+            source_rule_id=req.rule_id,
+            source_rule_name=req.rule_name,
+            source_version=req.source_version,
+            source_freshness=req.source_freshness,
+            occurred_at=req.occurred_at,
+            event_fingerprint=event_fingerprint,
+            correlation_key=correlation_key,
+        )
+        db.add(incident)
+        db.commit()
+        db.refresh(incident)
+
+    return {
+        "incident_id": incident.id,
+        "correlation_key": incident.correlation_key or correlation_key,
+        "linked_event_count": int(incident.hit_count or 1),
+        "counted_in_real_metrics": (incident.event_origin or REAL_EVENT_ORIGIN) == REAL_EVENT_ORIGIN,
+        "status": incident.status or "new",
+    }
 
 
 @router.put("/events/{event_id}/archive")
@@ -156,14 +300,13 @@ def archive_event(
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    """管理员：归档单条事件"""
-    evt = db.query(IDSEvent).filter(IDSEvent.id == event_id).first()
-    if not evt:
-        raise HTTPException(status_code=404, detail="事件不存在")
+    evt = _get_event_or_404(db, event_id)
     evt.archived = 1
     evt.status = "closed"
+    evt.response_result = "success"
+    evt.response_detail = "archived_by_operator"
     db.commit()
-    return {"code": 200, "message": "已归档"}
+    return {"code": 200, "message": "Event archived"}
 
 
 @router.post("/events/{event_id}/analyze")
@@ -172,24 +315,20 @@ def analyze_event_ai(
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    """管理员：对单条事件触发 LLM 研判（同步，可能较慢）。"""
     if not settings.IDS_AI_ANALYSIS:
-        raise HTTPException(status_code=400, detail="IDS_AI_ANALYSIS 未开启")
+        raise HTTPException(status_code=400, detail="IDS_AI_ANALYSIS is disabled")
     if not is_llm_available():
-        raise HTTPException(status_code=400, detail="未配置可用 LLM（Ollama 需 LLM_BASE_URL；OpenAI/DeepSeek 需 API Key）")
-    if not db.query(IDSEvent).filter(IDSEvent.id == event_id).first():
-        raise HTTPException(status_code=404, detail="事件不存在")
+        raise HTTPException(status_code=400, detail="No supported LLM configuration is available")
+    _get_event_or_404(db, event_id)
     run_ai_analysis_sync(event_id)
-    evt2 = db.query(IDSEvent).filter(IDSEvent.id == event_id).first()
-    if not evt2:
-        raise HTTPException(status_code=404, detail="事件不存在")
+    evt = _get_event_or_404(db, event_id)
     return {
         "code": 200,
-        "message": "研判完成",
-        "ai_risk_level": (evt2.ai_risk_level or "") if hasattr(evt2, "ai_risk_level") else "",
-        "ai_analysis": ((evt2.ai_analysis or "")[:4000]) if hasattr(evt2, "ai_analysis") else "",
-        "ai_confidence": int(getattr(evt2, "ai_confidence", 0) or 0),
-        "ai_analyzed_at": evt2.ai_analyzed_at.strftime("%Y-%m-%d %H:%M:%S") if evt2.ai_analyzed_at else None,
+        "message": "AI analysis completed",
+        "ai_risk_level": evt.ai_risk_level or "",
+        "ai_analysis": (evt.ai_analysis or "")[:4000],
+        "ai_confidence": int(evt.ai_confidence or 0),
+        "ai_analyzed_at": evt.ai_analyzed_at.strftime("%Y-%m-%d %H:%M:%S") if evt.ai_analyzed_at else None,
     }
 
 
@@ -203,14 +342,14 @@ def update_event_status(
     allowed = {"new", "investigating", "mitigated", "false_positive", "closed"}
     status = (req.status or "").strip()
     if status not in allowed:
-        raise HTTPException(status_code=400, detail=f"非法状态：{status}")
-    evt = db.query(IDSEvent).filter(IDSEvent.id == event_id).first()
-    if not evt:
-        raise HTTPException(status_code=404, detail="事件不存在")
+        raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+    evt = _get_event_or_404(db, event_id)
     evt.status = status
     evt.review_note = (req.review_note or "")[:2000]
+    evt.response_result = "success"
+    evt.response_detail = f"status_updated::{status}"
     db.commit()
-    return {"code": 200, "message": "状态已更新", "status": evt.status}
+    return {"code": 200, "message": "Status updated", "status": evt.status}
 
 
 @router.post("/events/{event_id}/block")
@@ -219,15 +358,16 @@ def block_event_ip(
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    evt = db.query(IDSEvent).filter(IDSEvent.id == event_id).first()
-    if not evt:
-        raise HTTPException(status_code=404, detail="事件不存在")
+    evt = _get_event_or_404(db, event_id)
     ok, msg = block_ip_windows(evt.client_ip or "")
-    evt.blocked = 1 if ok else evt.blocked
+    if ok:
+        evt.blocked = 1
     evt.firewall_rule = msg[:256]
     evt.action_taken = "manual_block" if ok else "manual_block_failed"
+    evt.response_result = "success" if ok else "failed"
+    evt.response_detail = msg[:1000]
     db.commit()
-    return {"code": 200, "message": "封禁完成" if ok else f"封禁未成功：{msg}", "ok": ok, "rule": msg}
+    return {"code": 200, "message": "Block executed" if ok else f"Block failed: {msg}", "ok": ok, "rule": msg}
 
 
 @router.post("/events/{event_id}/unblock")
@@ -236,15 +376,15 @@ def unblock_event_ip(
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    evt = db.query(IDSEvent).filter(IDSEvent.id == event_id).first()
-    if not evt:
-        raise HTTPException(status_code=404, detail="事件不存在")
+    evt = _get_event_or_404(db, event_id)
     ok, msg = unblock_ip_windows(evt.client_ip or "")
     if ok:
         evt.blocked = 0
     evt.action_taken = "manual_unblock" if ok else "manual_unblock_failed"
+    evt.response_result = "success" if ok else "failed"
+    evt.response_detail = msg[:1000]
     db.commit()
-    return {"code": 200, "message": "解封完成" if ok else f"解封未成功：{msg}", "ok": ok}
+    return {"code": 200, "message": "Unblock executed" if ok else f"Unblock failed: {msg}", "ok": ok}
 
 
 @router.get("/events/{event_id}/report")
@@ -254,12 +394,11 @@ def get_event_report(
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    evt = db.query(IDSEvent).filter(IDSEvent.id == event_id).first()
-    if not evt:
-        raise HTTPException(status_code=404, detail="事件不存在")
+    evt = _get_event_or_404(db, event_id)
     if force_ai == 1 and settings.IDS_AI_ANALYSIS and is_llm_available():
         run_ai_analysis_sync(event_id)
-        evt = db.query(IDSEvent).filter(IDSEvent.id == event_id).first() or evt
+        evt = _get_event_or_404(db, event_id)
+
     report = {
         "event_id": evt.id,
         "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
@@ -271,13 +410,15 @@ def get_event_report(
             "method": evt.method,
             "path": evt.path,
             "status": evt.status or "new",
+            "event_origin": evt.event_origin or REAL_EVENT_ORIGIN,
+            "detector_name": evt.detector_name or "",
         },
         "score": {
             "risk_score": int(evt.risk_score or 0),
             "rule_confidence": int(evt.confidence or 0),
             "hit_count": int(evt.hit_count or 0),
             "ai_risk_level": evt.ai_risk_level or "",
-            "ai_confidence": int(getattr(evt, "ai_confidence", 0) or 0),
+            "ai_confidence": int(evt.ai_confidence or 0),
         },
         "evidence": {
             "signature": evt.signature_matched or "",
@@ -290,32 +431,45 @@ def get_event_report(
             "firewall_rule": evt.firewall_rule or "",
             "action_taken": evt.action_taken or "",
             "review_note": evt.review_note or "",
+            "response_result": evt.response_result or "",
+            "response_detail": evt.response_detail or "",
+        },
+        "provenance": {
+            "source_classification": evt.source_classification or "",
+            "detector_family": evt.detector_family or "",
+            "detector_name": evt.detector_name or "",
+            "source_rule_id": evt.source_rule_id or "",
+            "source_rule_name": evt.source_rule_name or "",
+            "source_version": evt.source_version or "",
+            "source_freshness": evt.source_freshness or "",
         },
         "ai_analysis": evt.ai_analysis or "",
     }
-    md = (
-        f"# IDS 事件分析报告\\n\\n"
-        f"- 事件ID: {evt.id}\\n"
-        f"- 时间: {report['overview']['time']}\\n"
-        f"- 来源IP: {evt.client_ip}\\n"
-        f"- 类型: {_attack_type_label(evt.attack_type)} ({evt.attack_type})\\n"
-        f"- 方法/路径: {evt.method} {evt.path}\\n"
-        f"- 风险分: {int(evt.risk_score or 0)} / 100\\n"
-        f"- 规则置信度: {int(evt.confidence or 0)} / 100\\n"
-        f"- 命中次数: {int(evt.hit_count or 0)}\\n"
-        f"- 封禁状态: {'已封禁' if evt.blocked else '仅记录'}\\n"
-        f"- 防火墙规则: {evt.firewall_rule or '-'}\\n\\n"
-        f"## 规则证据\\n"
-        f"- 特征: {evt.signature_matched or '-'}\\n"
-        f"- Query: {(evt.query_snippet or '-')[:500]}\\n"
-        f"- Body: {(evt.body_snippet or '-')[:500]}\\n"
-        f"- UA: {(evt.user_agent or '-')[:300]}\\n\\n"
-        f"## AI 研判\\n"
-        f"- 风险等级: {evt.ai_risk_level or 'unknown'}\\n"
-        f"- AI置信度: {int(getattr(evt, 'ai_confidence', 0) or 0)}\\n\\n"
-        f"{evt.ai_analysis or '暂无 AI 研判结果'}\\n"
+    markdown = (
+        "# IDS Incident Report\n\n"
+        f"- Event ID: {evt.id}\n"
+        f"- Time: {report['overview']['time']}\n"
+        f"- Client IP: {evt.client_ip}\n"
+        f"- Type: {_attack_type_label(evt.attack_type)} ({evt.attack_type})\n"
+        f"- Origin: {evt.event_origin or REAL_EVENT_ORIGIN}\n"
+        f"- Detector: {evt.detector_name or '-'}\n"
+        f"- Path: {evt.method} {evt.path}\n"
+        f"- Risk Score: {int(evt.risk_score or 0)} / 100\n"
+        f"- Confidence: {int(evt.confidence or 0)} / 100\n"
+        f"- Hit Count: {int(evt.hit_count or 0)}\n"
+        f"- Blocked: {'yes' if evt.blocked else 'no'}\n"
+        f"- Firewall Rule: {evt.firewall_rule or '-'}\n\n"
+        "## Evidence\n"
+        f"- Signature: {evt.signature_matched or '-'}\n"
+        f"- Query: {(evt.query_snippet or '-')[:500]}\n"
+        f"- Body: {(evt.body_snippet or '-')[:500]}\n"
+        f"- User-Agent: {(evt.user_agent or '-')[:300]}\n\n"
+        "## AI Analysis\n"
+        f"- Risk Level: {evt.ai_risk_level or 'unknown'}\n"
+        f"- AI Confidence: {int(evt.ai_confidence or 0)}\n\n"
+        f"{evt.ai_analysis or 'No AI analysis available.'}\n"
     )
-    return {"report": report, "markdown": md}
+    return {"report": report, "markdown": markdown}
 
 
 @router.get("/demo/phase1/aggregate-report")
@@ -323,7 +477,6 @@ def get_phase1_aggregate_report(
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    """多向量并发：汇总本轮演示注入的全部攻击类型，生成一条聚合研判报告。"""
     rows = (
         db.query(IDSEvent)
         .filter(IDSEvent.action_taken.like("demo_seed_phase1::%"))
@@ -331,114 +484,95 @@ def get_phase1_aggregate_report(
         .all()
     )
     if not rows:
-        raise HTTPException(status_code=404, detail="暂无多向量演示数据，请先执行演示注入")
-    ips = sorted({r.client_ip or "" for r in rows if r.client_ip})
-    type_order: list[str] = []
-    for r in rows:
-        lab = _attack_type_label(r.attack_type)
-        if lab not in type_order:
-            type_order.append(lab)
-    max_score = max(int(r.risk_score or 0) for r in rows)
-    max_conf = max(int(r.confidence or 0) for r in rows)
-    blocked_n = sum(1 for r in rows if r.blocked)
-    hit_sum = sum(int(r.hit_count or 0) for r in rows)
-    t0 = rows[0].created_at.strftime("%Y-%m-%d %H:%M:%S") if rows[0].created_at else ""
-    ip_line = "、".join(ips[:6]) + (f" 等共 {len(ips)} 个来源" if len(ips) > 6 else "")
+        raise HTTPException(status_code=404, detail="No phase1 demo events found")
 
-    ai_text = (
-        "【研判摘要】在同一监测窗口内观测到多源、多向量并发攻击，涵盖 SQL 注入、跨站脚本、路径遍历、"
-        "命令注入、JNDI 类载荷、原型链污染及扫描器探测等，符合自动化攻击链「横向探测—定向利用」特征。\n"
-        f"【影响评估】若部分请求穿透防护，可能导致数据泄露、会话劫持、敏感文件读取或远程执行。本批共记录 {len(rows)} 条事件，"
-        f"其中已执行阻断 {blocked_n} 条。\n"
-        "【关联分析】来源分布于多个网段，User-Agent 呈现自动化扫描特征，时间序列上呈短 burst 并发，建议按 IP 与接口维度做关联封禁。\n"
-        "【处置建议】① 维持对高危来源的封禁与限速；② 对公开上传、AI 对话等接口强化输入校验与频率限制；③ 结合本报告向量明细逐项复核业务暴露面。"
-    )
+    ips = sorted({row.client_ip or "" for row in rows if row.client_ip})
+    attack_labels: list[str] = []
+    for row in rows:
+        label = _attack_type_label(row.attack_type)
+        if label not in attack_labels:
+            attack_labels.append(label)
 
-    atk_cnt = Counter((r.attack_type or "") for r in rows)
+    max_score = max(int(row.risk_score or 0) for row in rows)
+    max_conf = max(int(row.confidence or 0) for row in rows)
+    blocked_count = sum(1 for row in rows if row.blocked)
+    total_hits = sum(int(row.hit_count or 0) for row in rows)
+    first_time = rows[0].created_at.strftime("%Y-%m-%d %H:%M:%S") if rows[0].created_at else ""
+    by_attack = Counter((row.attack_type or "") for row in rows)
 
-    def _fam(fid: str, name_zh: str, desc: str) -> dict:
-        n = int(atk_cnt.get(fid, 0))
-        return {
-            "id": fid,
-            "name_zh": name_zh,
-            "description": desc,
-            "detected": n > 0,
-            "event_count": n,
+    return {
+        "report": {
+            "kind": "aggregate_phase1",
+            "event_id": rows[0].id,
+            "event_count": len(rows),
+            "attack_type_labels": attack_labels,
+            "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "overview": {
+                "time": first_time,
+                "client_ip": ", ".join(ips[:6]) if ips else "-",
+                "attack_type": "multi_vector",
+                "attack_type_label": "Multi-vector demo chain",
+                "method": "GET/POST",
+                "path": "multiple endpoints",
+                "status": "investigating",
+            },
+            "score": {
+                "risk_score": max_score,
+                "rule_confidence": max_conf,
+                "hit_count": total_hits,
+                "ai_risk_level": "high",
+                "ai_confidence": min(99, max(88, max_conf - 2)),
+            },
+            "evidence": {
+                "signature": "aggregate::demo_seed_phase1",
+                "query_snippet": f"{len(rows)} demo events across {', '.join(attack_labels)}",
+                "body_snippet": "See vector details in report",
+                "user_agent": "RedTeam-AutoScanner/1.0",
+            },
+            "response": {
+                "blocked": blocked_count > 0,
+                "firewall_rule": f"IDS-Aggregate-{len(rows)}evt",
+                "action_taken": "aggregate_investigation",
+                "review_note": "Aggregated demo phase1 chain",
+            },
+            "analysis_json": {
+                "report_type": "ids_ai_aggregate",
+                "scenario": "multi_vector_concurrent_attack",
+                "engine": "IDS_RULE_ENGINE + LLM_ASSIST",
+                "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                "summary": {
+                    "total_events": len(rows),
+                    "unique_source_ips": len(ips),
+                    "peak_risk_score": max_score,
+                    "blocked_count": blocked_count,
+                    "aggregate_risk_level": "high",
+                },
+                "attack_families": [
+                    {
+                        "id": attack_id,
+                        "name_zh": _attack_type_label(attack_id),
+                        "description": "Aggregated from seeded demo events",
+                        "detected": count > 0,
+                        "event_count": int(count),
+                    }
+                    for attack_id, count in by_attack.items()
+                ],
+            },
+            "vectors": [
+                {
+                    "attack_type": row.attack_type,
+                    "attack_type_label": _attack_type_label(row.attack_type),
+                    "client_ip": row.client_ip,
+                    "method": row.method,
+                    "path": (row.path or "")[:200],
+                    "risk_score": int(row.risk_score or 0),
+                    "blocked": bool(row.blocked),
+                }
+                for row in rows
+            ],
+            "ai_analysis": "Demo aggregation report for the phase1 attack chain.",
         }
-
-    analysis_json = {
-        "report_type": "ids_ai_aggregate",
-        "scenario": "multi_vector_concurrent_attack",
-        "engine": "IDS_RULE_ENGINE + LLM_ASSIST",
-        "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        "summary": {
-            "total_events": len(rows),
-            "unique_source_ips": len(ips),
-            "peak_risk_score": max_score,
-            "blocked_count": blocked_n,
-            "aggregate_risk_level": "high",
-        },
-        "attack_families": [
-            _fam("sql_injection", "SQL 注入", "Union/布尔盲注等数据库操纵尝试"),
-            _fam("xss", "跨站脚本 XSS", "存储型/反射型脚本注入与会话窃取风险"),
-            _fam("path_traversal", "路径遍历", "敏感文件与系统路径泄露尝试"),
-            _fam("cmd_injection", "命令注入", "操作系统命令执行与管道注入"),
-            _fam("prototype_pollution", "原型链污染", "JavaScript 对象原型污染与逻辑绕过"),
-            _fam("scanner", "扫描器 / 漏洞探测", "目录扫描、指纹探测与自动化漏洞利用前置"),
-            _fam("jndi_injection", "JNDI / Log4j 类", "JNDI 查找与远程类加载载荷"),
-        ],
     }
-
-    report = {
-        "kind": "aggregate_phase1",
-        "event_id": rows[0].id,
-        "event_count": len(rows),
-        "attack_type_labels": type_order,
-        "analysis_json": analysis_json,
-        "vectors": [
-            {
-                "attack_type": r.attack_type,
-                "attack_type_label": _attack_type_label(r.attack_type),
-                "client_ip": r.client_ip,
-                "method": r.method,
-                "path": (r.path or "")[:200],
-                "risk_score": int(r.risk_score or 0),
-                "blocked": bool(r.blocked),
-            }
-            for r in rows
-        ],
-        "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        "overview": {
-            "time": f"{t0}（同一窗口内并发）",
-            "client_ip": ip_line or "-",
-            "attack_type": "multi_vector",
-            "attack_type_label": "多向量并发攻击（自动化攻击链）",
-            "method": "GET/POST 混合",
-            "path": "采购/溯源/上传/概览/AI 等多接口",
-            "status": "investigating",
-        },
-        "score": {
-            "risk_score": max_score,
-            "rule_confidence": max_conf,
-            "hit_count": hit_sum,
-            "ai_risk_level": "high",
-            "ai_confidence": min(99, max(88, max_conf - 2)),
-        },
-        "evidence": {
-            "signature": "aggregate::demo_seed_phase1",
-            "query_snippet": f"并发事件数={len(rows)}；攻击类型覆盖={', '.join(type_order)}",
-            "body_snippet": "详见报告内「攻击向量明细」",
-            "user_agent": "RedTeam-AutoScanner/1.0（多会话）",
-        },
-        "response": {
-            "blocked": blocked_n > 0,
-            "firewall_rule": f"IDS-Aggregate-{len(rows)}evt",
-            "action_taken": "aggregate_investigation",
-            "review_note": "多向量并发聚合研判",
-        },
-        "ai_analysis": ai_text,
-    }
-    return {"report": report}
 
 
 @router.post("/demo/phase1")
@@ -447,9 +581,9 @@ def seed_demo_phase1(
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    """演示注入：批量生成“自动化攻击链”事件（不改真实拦截逻辑）。"""
     db.query(IDSEvent).filter(IDSEvent.action_taken.like("demo_seed_phase1::%")).delete(synchronize_session=False)
     db.commit()
+
     rows = [
         ("sql_injection", "GET", "/api/purchase?kw=1' OR '1'='1", "192.168.31.101", 92, 95, 1, "firewall_block"),
         ("xss", "GET", "/api/trace?keyword=<script>alert(1)</script>", "192.168.31.101", 84, 90, 1, "logical_block_only"),
@@ -460,12 +594,13 @@ def seed_demo_phase1(
         ("scanner", "GET", "/.git/config", "45.90.12.8", 59, 73, 0, "record_only"),
         ("scanner", "GET", "/wp-login.php", "45.90.12.8", 74, 81, 1, "logical_block_only"),
     ]
+
     seeded: list[int] = []
-    for atype, method, path, ip, score, conf, blocked, action in rows:
+    for attack_type, method, path, ip, score, confidence, blocked, action in rows:
         evt = IDSEvent(
             client_ip=ip,
-            attack_type=atype,
-            signature_matched=f"demo_signature::{atype}",
+            attack_type=attack_type,
+            signature_matched=f"demo_signature::{attack_type}",
             method=method,
             path=path,
             query_snippet=path.split("?", 1)[-1] if "?" in path else "",
@@ -476,30 +611,45 @@ def seed_demo_phase1(
             firewall_rule=(f"IDS-Block-{ip.replace('.', '-')}" if blocked else ""),
             archived=0,
             status="investigating",
-            review_note="演示数据：自动化攻击链",
+            review_note="Demo data: automated attack chain",
             action_taken=f"demo_seed_phase1::{action}",
+            response_result="success" if blocked else "record_only",
+            response_detail=action,
             risk_score=score,
-            confidence=conf,
+            confidence=confidence,
             hit_count=2 if score >= 80 else 1,
             detect_detail='[{"attack":"demo","source":"seed"}]',
             ai_risk_level=("high" if score >= 85 else ("medium" if score >= 70 else "low")),
-            ai_confidence=max(65, conf - 5),
+            ai_confidence=max(65, confidence - 5),
             ai_analysis=(
-                f"【研判摘要】检测到{_attack_type_label(atype)}自动化攻击行为，疑似扫描后利用。\n"
-                f"【影响评估】可能导致敏感信息泄露或业务请求被恶意操控。\n"
-                f"【关键证据】来源IP={ip}; 路径={path}; 风险分={score}。\n"
-                "【处置建议】建议持续封禁来源并开启高频请求限速。"
+                f"Detected demo {_attack_type_label(attack_type)} activity.\n"
+                f"Impact: simulated risk score {score}.\n"
+                f"Evidence: source_ip={ip}; path={path}.\n"
+                "Recommendation: keep demo events isolated from real metrics."
             ),
         )
         evt.created_at = datetime.utcnow()
         evt.ai_analyzed_at = evt.created_at
+        apply_source_metadata(
+            evt,
+            event_origin=DEMO_EVENT_ORIGIN,
+            source_classification=SOURCE_CUSTOM_PROJECT,
+            detector_family="web",
+            detector_name="demo_phase1_seed",
+            source_rule_id=f"demo_signature::{attack_type}",
+            source_rule_name=attack_type,
+            source_version="demo-phase1",
+            source_freshness="current",
+            occurred_at=evt.created_at,
+        )
         db.add(evt)
         db.flush()
         seeded.append(evt.id)
+
     db.commit()
     if (req.auto_analyze if req else True) and settings.IDS_AI_ANALYSIS and is_llm_available() and seeded:
         run_ai_analysis_sync(seeded[0])
-    return {"code": 200, "message": "多向量攻击链演示事件已生成", "event_ids": seeded}
+    return {"code": 200, "message": "Phase1 demo events created", "event_ids": seeded}
 
 
 @router.post("/demo/phase2")
@@ -508,9 +658,9 @@ def seed_demo_phase2(
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    """演示注入：生成“木马上传拦截”高危事件。"""
     db.query(IDSEvent).filter(IDSEvent.action_taken.like("demo_seed_phase2::%")).delete(synchronize_session=False)
     db.commit()
+
     now = datetime.utcnow()
     evt = IDSEvent(
         client_ip="172.16.9.23",
@@ -526,8 +676,10 @@ def seed_demo_phase2(
         firewall_rule="IDS-Block-172-16-9-23",
         archived=0,
         status="mitigated",
-        review_note="演示数据：木马上传拦截",
+        review_note="Demo data: webshell upload interception",
         action_taken="demo_seed_phase2::firewall_block",
+        response_result="success",
+        response_detail="firewall_block",
         risk_score=97,
         confidence=99,
         hit_count=3,
@@ -535,20 +687,33 @@ def seed_demo_phase2(
         ai_risk_level="high",
         ai_confidence=97,
         ai_analysis=(
-            "【研判摘要】检测到高风险文件上传攻击，疑似 WebShell 投递。\n"
-            "【影响评估】若绕过拦截可能造成远程命令执行与数据泄露。\n"
-            "【关键证据】恶意上传路径=/api/upload/public，payload 命中木马特征。\n"
-            "【处置建议】保持封禁，核查上传策略并对相近来源进行横向排查。"
+            "Detected demo webshell upload event.\n"
+            "Impact: simulated high-risk file upload.\n"
+            "Evidence: upload endpoint and suspicious payload markers.\n"
+            "Recommendation: keep demo file events isolated from real metrics."
         ),
     )
     evt.created_at = now
     evt.ai_analyzed_at = now
+    apply_source_metadata(
+        evt,
+        event_origin=DEMO_EVENT_ORIGIN,
+        source_classification=SOURCE_CUSTOM_PROJECT,
+        detector_family="file",
+        detector_name="demo_phase2_seed",
+        source_rule_id="demo_malware_upload::webshell",
+        source_rule_name="malware",
+        source_version="demo-phase2",
+        source_freshness="current",
+        occurred_at=now,
+    )
     db.add(evt)
     db.commit()
     db.refresh(evt)
+
     if (req.auto_analyze if req else True) and settings.IDS_AI_ANALYSIS and is_llm_available():
         run_ai_analysis_sync(evt.id)
-    return {"code": 200, "message": "木马拦截演示事件已生成", "event_id": evt.id}
+    return {"code": 200, "message": "Phase2 demo event created", "event_id": evt.id}
 
 
 @router.post("/demo/reset")
@@ -556,14 +721,13 @@ def reset_demo_events(
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    """清理演示注入事件。"""
-    n = (
+    deleted = (
         db.query(IDSEvent)
-        .filter(IDSEvent.action_taken.like("demo_seed_phase%"))
+        .filter(IDSEvent.event_origin == DEMO_EVENT_ORIGIN)
         .delete(synchronize_session=False)
     )
     db.commit()
-    return {"code": 200, "message": f"已清理 {n} 条演示事件", "deleted": n}
+    return {"code": 200, "message": f"Deleted {deleted} demo events", "deleted": deleted}
 
 
 @router.post("/events/archive-batch")
@@ -572,28 +736,217 @@ def archive_batch(
     db: Session = Depends(get_db),
     current_user=Depends(_admin),
 ):
-    """管理员：批量归档"""
     event_ids = req.event_ids or []
     if not event_ids:
-        return {"code": 200, "message": "未选择任何事件", "archived": 0}
+        return {"code": 200, "message": "No events selected", "archived": 0}
     db.query(IDSEvent).filter(IDSEvent.id.in_(event_ids)).update(
-        {IDSEvent.archived: 1, IDSEvent.status: "closed"},
+        {
+            IDSEvent.archived: 1,
+            IDSEvent.status: "closed",
+            IDSEvent.response_result: "success",
+            IDSEvent.response_detail: "archived_by_batch",
+        },
         synchronize_session=False,
     )
     db.commit()
-    return {"code": 200, "message": f"已归档 {len(event_ids)} 条", "archived": len(event_ids)}
+    return {"code": 200, "message": f"Archived {len(event_ids)} events", "archived": len(event_ids)}
 
 
-def _attack_type_label(t: str) -> str:
+def _find_correlated_ingested_event(
+    db: Session,
+    *,
+    event_origin: str,
+    event_fingerprint: str,
+    correlation_key: str,
+    occurred_at: datetime,
+) -> IDSEvent | None:
+    # Bound correlation to active recent incidents so review stays manageable.
+    review_window_start = occurred_at - timedelta(hours=24)
+    q = (
+        db.query(IDSEvent)
+        .filter(IDSEvent.archived == 0)
+        .filter(IDSEvent.event_origin == event_origin)
+        .filter(IDSEvent.created_at >= review_window_start)
+    )
+    if event_fingerprint:
+        evt = q.filter(IDSEvent.event_fingerprint == event_fingerprint).order_by(IDSEvent.id.desc()).first()
+        if evt:
+            return evt
+    if correlation_key:
+        evt = q.filter(IDSEvent.correlation_key == correlation_key).order_by(IDSEvent.id.desc()).first()
+        if evt:
+            return evt
+    return None
+
+
+def _merge_ingested_event(
+    evt: IDSEvent,
+    *,
+    req: IngestEventRequest,
+    raw_evidence: IngestRawEvidence,
+    event_fingerprint: str,
+    correlation_key: str,
+):
+    evt.hit_count = int(evt.hit_count or 0) + 1
+    evt.risk_score = max(int(evt.risk_score or 0), _severity_to_risk_score(req.severity, req.confidence))
+    evt.confidence = max(int(evt.confidence or 0), int(req.confidence or 0))
+    evt.signature_matched = (req.rule_name or req.rule_id or evt.signature_matched or "")[:128]
+    evt.response_result = evt.response_result or "record_only"
+    evt.response_detail = (req.evidence_summary or evt.response_detail or "ingest_correlated")[:1000]
+    evt.action_taken = f"ingested::{req.source_classification}::correlated"
+    if raw_evidence.method:
+        evt.method = raw_evidence.method[:16].upper()
+    if raw_evidence.path or req.asset_ref:
+        evt.path = (raw_evidence.path or req.asset_ref)[:512]
+    if raw_evidence.query_snippet:
+        evt.query_snippet = raw_evidence.query_snippet[:500]
+    if raw_evidence.body_snippet:
+        evt.body_snippet = raw_evidence.body_snippet[:500]
+    if raw_evidence.user_agent:
+        evt.user_agent = raw_evidence.user_agent[:512]
+    if raw_evidence.headers_snippet:
+        evt.headers_snippet = raw_evidence.headers_snippet[:1000]
+    evt.detect_detail = _build_ingested_detect_detail(req, raw_evidence)
+    apply_source_metadata(
+        evt,
+        event_origin=req.event_origin,
+        source_classification=req.source_classification,
+        detector_family=req.detector_family,
+        detector_name=req.detector_name,
+        source_rule_id=req.rule_id,
+        source_rule_name=req.rule_name,
+        source_version=req.source_version,
+        source_freshness=req.source_freshness,
+        occurred_at=req.occurred_at,
+        event_fingerprint=event_fingerprint,
+        correlation_key=correlation_key,
+    )
+
+
+def _severity_to_risk_score(severity: str | None, confidence: int | None) -> int:
+    base = {
+        "low": 35,
+        "medium": 60,
+        "high": 82,
+        "critical": 96,
+    }.get((severity or "").strip().lower(), 60)
+    confidence_score = max(0, min(100, int(confidence or 0)))
+    return max(base, confidence_score)
+
+
+def _build_ingested_detect_detail(req: IngestEventRequest, raw_evidence: IngestRawEvidence) -> str:
+    summary = (req.evidence_summary or "").strip()
+    detail_parts = [
+        f"origin={req.event_origin}",
+        f"source={req.source_classification}",
+        f"detector={req.detector_name}",
+        f"rule_id={req.rule_id or '-'}",
+        f"rule_name={req.rule_name or '-'}",
+        f"severity={req.severity or '-'}",
+        f"summary={summary or '-'}",
+        f"method={(raw_evidence.method or '').strip().upper() or '-'}",
+        f"path={(raw_evidence.path or req.asset_ref or '').strip() or '-'}",
+    ]
+    return " | ".join(detail_parts)[:4000]
+
+
+def _filtered_ids_query(
+    db: Session,
+    *,
+    attack_type: str | None = None,
+    client_ip: str | None = None,
+    blocked: int | None = None,
+    archived: int | None = None,
+    status: str | None = None,
+    event_origin: str | None = None,
+    source_classification: str | None = None,
+    min_score: int | None = None,
+):
+    q = db.query(IDSEvent)
+    if attack_type:
+        q = q.filter(IDSEvent.attack_type == attack_type)
+    if client_ip:
+        q = q.filter(IDSEvent.client_ip.contains(client_ip))
+    if blocked is not None:
+        q = q.filter(IDSEvent.blocked == blocked)
+    if archived is not None:
+        q = q.filter(IDSEvent.archived == archived)
+    if status:
+        q = q.filter(IDSEvent.status == status)
+    if event_origin:
+        q = q.filter(IDSEvent.event_origin == event_origin)
+    if source_classification:
+        q = q.filter(IDSEvent.source_classification == source_classification)
+    if min_score is not None:
+        q = q.filter(IDSEvent.risk_score >= min_score)
+    return q
+
+
+def _get_event_or_404(db: Session, event_id: int) -> IDSEvent:
+    evt = db.query(IDSEvent).filter(IDSEvent.id == event_id).first()
+    if not evt:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return evt
+
+
+def _attack_type_label(attack_type: str | None) -> str:
     labels = {
-        "sql_injection": "SQL 注入",
-        "xss": "跨站脚本 XSS",
-        "path_traversal": "路径遍历",
-        "cmd_injection": "命令注入",
-        "scanner": "扫描器/探测",
-        "malformed": "畸形请求",
-        "jndi_injection": "JNDI/Log4j 类",
-        "prototype_pollution": "原型链污染",
-        "malware": "木马 / WebShell",
+        "sql_injection": "SQL Injection",
+        "xss": "XSS",
+        "path_traversal": "Path Traversal",
+        "cmd_injection": "Command Injection",
+        "scanner": "Scanner / Probe",
+        "malformed": "Malformed Request",
+        "jndi_injection": "JNDI / Log4Shell",
+        "prototype_pollution": "Prototype Pollution",
+        "malware": "Malware / WebShell",
     }
-    return labels.get(t or "", t or "-")
+    return labels.get(attack_type or "", attack_type or "-")
+
+
+def _event_origin_label(origin: str | None) -> str:
+    labels = {"real": "Real", "demo": "Demo", "test": "Test"}
+    return labels.get((origin or "").strip(), origin or REAL_EVENT_ORIGIN)
+
+
+def _serialize_ids_event(row: IDSEvent) -> dict:
+    return {
+        "id": row.id,
+        "client_ip": row.client_ip,
+        "event_origin": row.event_origin or REAL_EVENT_ORIGIN,
+        "event_origin_label": _event_origin_label(row.event_origin),
+        "source_classification": row.source_classification or "",
+        "detector_family": row.detector_family or "",
+        "detector_name": row.detector_name or "",
+        "source_rule_id": row.source_rule_id or "",
+        "source_rule_name": row.source_rule_name or "",
+        "source_version": row.source_version or "",
+        "source_freshness": row.source_freshness or "",
+        "event_fingerprint": row.event_fingerprint or "",
+        "correlation_key": row.correlation_key or "",
+        "counted_in_real_metrics": (row.event_origin or REAL_EVENT_ORIGIN) == REAL_EVENT_ORIGIN,
+        "attack_type": row.attack_type,
+        "attack_type_label": _attack_type_label(row.attack_type),
+        "signature_matched": row.signature_matched,
+        "method": row.method,
+        "path": row.path,
+        "query_snippet": (row.query_snippet or "")[:200],
+        "body_snippet": (row.body_snippet or "")[:200],
+        "user_agent": (row.user_agent or "")[:200],
+        "blocked": row.blocked,
+        "firewall_rule": row.firewall_rule or "",
+        "archived": row.archived,
+        "status": row.status or "new",
+        "review_note": (row.review_note or "")[:500],
+        "action_taken": row.action_taken or "",
+        "response_result": row.response_result or "",
+        "response_detail": (row.response_detail or "")[:1000],
+        "risk_score": int(row.risk_score or 0),
+        "confidence": int(row.confidence or 0),
+        "hit_count": int(row.hit_count or 0),
+        "created_at": row.created_at.strftime("%Y-%m-%d %H:%M:%S") if row.created_at else None,
+        "ai_risk_level": row.ai_risk_level or "",
+        "ai_analysis": (row.ai_analysis or "")[:2000],
+        "ai_confidence": int(row.ai_confidence or 0),
+        "ai_analyzed_at": row.ai_analyzed_at.strftime("%Y-%m-%d %H:%M:%S") if row.ai_analyzed_at else None,
+    }

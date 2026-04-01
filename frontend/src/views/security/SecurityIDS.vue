@@ -21,18 +21,12 @@ import {
   resetIDSDemoEvents,
   getIDSPhase1AggregateReport,
 } from '@/api/ids'
-import type { IDSEventItem } from '@/api/ids'
+import type { IDSEventItem, IDSStatsResponse } from '@/api/ids'
 
 const loading = ref(false)
 const trendDays = ref(7)
 const trendData = ref<{ dates: string[]; counts: number[] }>({ dates: [], counts: [] })
-const stats = ref<{
-  total: number
-  blocked_count: number
-  high_risk_count?: number
-  by_type: { attack_type: string; attack_type_label: string; count: number }[]
-  by_status?: { status: string; count: number }[]
-} | null>(null)
+const stats = ref<IDSStatsResponse | null>(null)
 const tableData = ref<IDSEventItem[]>([])
 const total = ref(0)
 const attackTypeFilter = ref('')
@@ -40,6 +34,8 @@ const clientIpFilter = ref('')
 const blockedFilter = ref<number | undefined>(undefined)
 const archivedFilter = ref<number | undefined>(undefined)
 const statusFilter = ref<string>('')
+const eventOriginFilter = ref<string>('real')
+const sourceClassificationFilter = ref<string>('')
 const minScoreFilter = ref<number | undefined>(undefined)
 const pageSize = ref(20)
 const pageOffset = ref(0)
@@ -88,9 +84,29 @@ function tickIdsHudClock() {
   idsHudClock.value = new Date().toLocaleString('zh-CN', { hour12: false })
 }
 
+function buildStatsFilters() {
+  return {
+    event_origin: eventOriginFilter.value || undefined,
+    source_classification: sourceClassificationFilter.value || undefined,
+  }
+}
+
+const metricsScopeLabel = computed(() => {
+  if (eventOriginFilter.value === 'demo') return '演示事件'
+  if (eventOriginFilter.value === 'test') return '测试事件'
+  if (!eventOriginFilter.value) return '全部事件'
+  return '真实事件'
+})
+
+const metricsScopeHint = computed(() => {
+  if (eventOriginFilter.value === 'real') return '默认运营指标仅统计真实事件，演示和测试数据不会混入。'
+  if (!eventOriginFilter.value) return '当前视图包含真实、演示与测试数据，指标仅用于全量回看。'
+  return '当前视图不是生产运营口径，请结合来源标签解读数据。'
+})
+
 async function fetchStats() {
   try {
-    const res: any = await getIDSStats()
+    const res: any = await getIDSStats(buildStatsFilters())
     stats.value = res?.data ?? res
     renderPieChart()
   } catch {
@@ -100,7 +116,7 @@ async function fetchStats() {
 
 async function fetchTrend() {
   try {
-    const res: any = await getIDSTrend(trendDays.value)
+    const res: any = await getIDSTrend(trendDays.value, buildStatsFilters())
     trendData.value = res?.data ?? res ?? { dates: [], counts: [] }
     renderTrendChart()
   } catch {
@@ -220,6 +236,8 @@ async function fetchData() {
       blocked: blockedFilter.value,
       archived: archivedFilter.value,
       status: statusFilter.value || undefined,
+      event_origin: eventOriginFilter.value || undefined,
+      source_classification: sourceClassificationFilter.value || undefined,
       min_score: minScoreFilter.value,
       limit: pageSize.value,
       offset: pageOffset.value,
@@ -266,6 +284,39 @@ function fmtFirewallRuleTable(rule: string | null | undefined): string {
   if (/drop|deny|block/i.test(s)) return '拦截'
   if (/pass|accept|allow/i.test(s)) return '放行'
   return '已配'
+}
+
+function sourceClassificationLabel(value: string | null | undefined): string {
+  if (value === 'external_mature') return '成熟规则源'
+  if (value === 'custom_project') return '项目自定义'
+  if (value === 'transitional_local') return '过渡本地检测'
+  return value?.trim() || '-'
+}
+
+function sourceClassificationTagType(value: string | null | undefined): 'success' | 'warning' | 'info' {
+  if (value === 'external_mature') return 'success'
+  if (value === 'custom_project') return 'warning'
+  return 'info'
+}
+
+function sourceFreshnessLabel(value: string | null | undefined): string {
+  if (value === 'current') return '当前'
+  if (value === 'stale') return '待更新'
+  if (value === 'unknown') return '未知'
+  return value?.trim() || '-'
+}
+
+function responseResultLabel(value: string | null | undefined): string {
+  if (value === 'success') return '执行成功'
+  if (value === 'failed') return '执行失败'
+  if (value === 'record_only') return '仅记录'
+  return value?.trim() || '-'
+}
+
+function responseResultTagType(value: string | null | undefined): 'success' | 'danger' | 'info' {
+  if (value === 'success') return 'success'
+  if (value === 'failed') return 'danger'
+  return 'info'
 }
 
 const timelineSummaryNodes = computed(() => {
@@ -360,6 +411,8 @@ async function openEvidenceTimeline() {
 function handleSearch() {
   pageOffset.value = 0
   fetchData()
+  fetchStats()
+  fetchTrend()
 }
 
 async function handleArchive(row: IDSEventItem) {
@@ -404,7 +457,11 @@ async function handleSimulateAttack() {
   } catch {
     /* 403 为预期，请求已被 IDS 拦截 */
   }
-  ElMessage.success('已发送模拟攻击请求，检测记录已生成，请查看上方列表')
+  ElMessage.success(
+    eventOriginFilter.value === 'real'
+      ? '演示请求已发送。当前默认视图只展示真实事件，如需检查演示数据请将事件范围切换到“演示事件”。'
+      : '演示请求已发送，检测记录已生成，请查看当前列表。',
+  )
   await fetchStats()
   await fetchTrend()
   await fetchData()
@@ -975,6 +1032,12 @@ onBeforeUnmount(() => {
 })
 watch([pageOffset, pageSize], fetchData)
 watch(trendDays, () => fetchTrend())
+watch([eventOriginFilter, sourceClassificationFilter], () => {
+  pageOffset.value = 0
+  fetchStats()
+  fetchTrend()
+  fetchData()
+})
 </script>
 
 <template>
@@ -1045,8 +1108,31 @@ watch(trendDays, () => fetchTrend())
         </div>
       </div>
 
+      <div class="scope-banner sec-card">
+        <div class="scope-banner__copy">
+          <div class="scope-banner__title">当前指标视角：{{ metricsScopeLabel }}</div>
+          <div class="scope-banner__text">{{ metricsScopeHint }}</div>
+        </div>
+        <div class="scope-banner__tags">
+          <el-tag size="small" type="info">{{ metricsScopeLabel }}</el-tag>
+          <el-tag
+            v-if="sourceClassificationFilter"
+            size="small"
+            :type="sourceClassificationTagType(sourceClassificationFilter)"
+          >
+            {{ sourceClassificationLabel(sourceClassificationFilter) }}
+          </el-tag>
+        </div>
+      </div>
+
       <div class="filter-bar">
         <el-input v-model="clientIpFilter" placeholder="来源 IP" clearable class="sec-input" />
+        <el-select v-model="eventOriginFilter" placeholder="事件范围" clearable class="sec-select">
+          <el-option label="真实事件" value="real" />
+          <el-option label="演示事件" value="demo" />
+          <el-option label="测试事件" value="test" />
+          <el-option label="全部事件" value="" />
+        </el-select>
         <el-select v-model="attackTypeFilter" placeholder="攻击类型" clearable class="sec-select">
           <el-option label="SQL 注入" value="sql_injection" />
           <el-option label="XSS" value="xss" />
@@ -1056,6 +1142,11 @@ watch(trendDays, () => fetchTrend())
           <el-option label="畸形请求" value="malformed" />
           <el-option label="JNDI 类" value="jndi_injection" />
           <el-option label="原型链污染" value="prototype_pollution" />
+        </el-select>
+        <el-select v-model="sourceClassificationFilter" placeholder="检测来源" clearable class="sec-select">
+          <el-option label="成熟规则源" value="external_mature" />
+          <el-option label="项目自定义" value="custom_project" />
+          <el-option label="过渡本地检测" value="transitional_local" />
         </el-select>
         <el-select v-model="blockedFilter" placeholder="封禁状态" clearable class="sec-select">
           <el-option label="已封禁" :value="1" />
@@ -1083,7 +1174,7 @@ watch(trendDays, () => fetchTrend())
           批量归档 ({{ selectedIds.length }})
         </el-button>
         <el-button type="warning" :loading="simulatingAttack" @click="handleSimulateAttack">
-          模拟攻击（演示）
+          演示注入（不计入真实指标）
         </el-button>
         <el-button type="info" @click="openEvidenceTimeline">证据链时间轴</el-button>
       </div>
@@ -1113,6 +1204,16 @@ watch(trendDays, () => fetchTrend())
               <el-tag :type="row.attack_type === 'sql_injection' ? 'danger' : 'warning'" size="small" class="ids-table-tag ids-table-tag--clip">
                 {{ row.attack_type_label }}
               </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="来源" width="168" min-width="156">
+            <template #default="{ row }">
+              <div class="cell-stack">
+                <span class="cell-ellipsis">{{ row.event_origin_label || '未标注' }}</span>
+                <span class="cell-sub" :title="row.detector_name || sourceClassificationLabel(row.source_classification)">
+                  {{ row.detector_name || sourceClassificationLabel(row.source_classification) }}
+                </span>
+              </div>
             </template>
           </el-table-column>
           <el-table-column prop="method" label="方法" width="78" min-width="72" align="center">
@@ -1259,6 +1360,53 @@ watch(trendDays, () => fetchTrend())
         <p><strong>命中数量：</strong>{{ currentRow.hit_count || 0 }}</p>
         <p><strong>处置状态：</strong>{{ currentRow.status || 'new' }}</p>
         <p><strong>处置备注：</strong>{{ currentRow.review_note || '-' }}</p>
+        <div class="detail-section">
+          <div class="detail-section__title">来源与响应</div>
+          <div class="detail-tags">
+            <el-tag size="small" type="info">{{ currentRow.event_origin_label || '-' }}</el-tag>
+            <el-tag size="small" :type="sourceClassificationTagType(currentRow.source_classification)">
+              {{ sourceClassificationLabel(currentRow.source_classification) }}
+            </el-tag>
+            <el-tag size="small" type="info">{{ sourceFreshnessLabel(currentRow.source_freshness) }}</el-tag>
+            <el-tag size="small" :type="responseResultTagType(currentRow.response_result)">
+              {{ responseResultLabel(currentRow.response_result) }}
+            </el-tag>
+          </div>
+          <div class="detail-grid">
+            <div class="detail-item">
+              <span class="detail-label">检测器</span>
+              <span class="detail-value">{{ currentRow.detector_name || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">检测家族</span>
+              <span class="detail-value">{{ currentRow.detector_family || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">规则 ID</span>
+              <span class="detail-value detail-value--mono">{{ currentRow.source_rule_id || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">规则版本</span>
+              <span class="detail-value">{{ currentRow.source_version || '-' }}</span>
+            </div>
+            <div class="detail-item detail-item--full">
+              <span class="detail-label">响应说明</span>
+              <span class="detail-value">{{ currentRow.response_detail || '-' }}</span>
+            </div>
+            <div class="detail-item detail-item--full">
+              <span class="detail-label">事件指纹</span>
+              <span class="detail-value detail-value--mono">{{ currentRow.event_fingerprint || '-' }}</span>
+            </div>
+            <div class="detail-item detail-item--full">
+              <span class="detail-label">关联键</span>
+              <span class="detail-value detail-value--mono">{{ currentRow.correlation_key || '-' }}</span>
+            </div>
+            <div class="detail-item detail-item--full">
+              <span class="detail-label">指标口径</span>
+              <span class="detail-value">{{ currentRow.counted_in_real_metrics ? '计入真实指标' : '不计入真实指标' }}</span>
+            </div>
+          </div>
+        </div>
         <div class="ai-block">
           <p class="ai-head">
             <strong>AI 研判</strong>
@@ -1683,6 +1831,39 @@ watch(trendDays, () => fetchTrend())
 .chart-arena { height: 220px; }
 .sec-select { width: 120px; margin-left: 8px; }
 
+.scope-banner {
+  margin-bottom: 16px;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.scope-banner__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scope-banner__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: rgba(226, 254, 255, 0.92);
+}
+
+.scope-banner__text {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.scope-banner__tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
@@ -1898,6 +2079,78 @@ watch(trendDays, () => fetchTrend())
 }
 
 /* 仅表体：避免与表头 .cell 规则不一致导致列对不齐；表头走 Element Plus 默认 */
+.cell-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cell-sub {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.52);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-section {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.detail-section__title {
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #67e8f9;
+  letter-spacing: 0.04em;
+}
+
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.detail-item--full {
+  grid-column: 1 / -1;
+}
+
+.detail-label {
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.9);
+}
+
+.detail-value {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.88);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.detail-value--mono {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
 :deep(
     .sec-table .el-table__body-wrapper .el-table__body tr > td:nth-child(2) .cell,
     .sec-table .el-table__body-wrapper .el-table__body tr > td:nth-child(3) .cell,

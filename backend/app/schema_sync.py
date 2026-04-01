@@ -3,6 +3,16 @@ from sqlalchemy import inspect, text
 
 SCHEMA_PATCHES: dict[str, dict[str, str]] = {
     "ids_events": {
+        "event_origin": "VARCHAR(16)",
+        "source_classification": "VARCHAR(32)",
+        "detector_family": "VARCHAR(32)",
+        "detector_name": "VARCHAR(64)",
+        "source_rule_id": "VARCHAR(128)",
+        "source_rule_name": "VARCHAR(128)",
+        "source_version": "VARCHAR(64)",
+        "source_freshness": "VARCHAR(16)",
+        "event_fingerprint": "VARCHAR(255)",
+        "correlation_key": "VARCHAR(255)",
         "ai_analysis": "TEXT",
         "ai_risk_level": "VARCHAR(32)",
         "ai_confidence": "INTEGER",
@@ -10,6 +20,8 @@ SCHEMA_PATCHES: dict[str, dict[str, str]] = {
         "status": "VARCHAR(32)",
         "review_note": "TEXT",
         "action_taken": "VARCHAR(128)",
+        "response_result": "VARCHAR(32)",
+        "response_detail": "TEXT",
         "risk_score": "INTEGER",
         "confidence": "INTEGER",
         "hit_count": "INTEGER",

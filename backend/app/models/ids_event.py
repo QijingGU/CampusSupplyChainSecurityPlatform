@@ -9,6 +9,16 @@ class IDSEvent(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     client_ip = Column(String(64), nullable=False, index=True)
+    event_origin = Column(String(16), default="real", index=True)
+    source_classification = Column(String(32), default="transitional_local", index=True)
+    detector_family = Column(String(32), default="", index=True)
+    detector_name = Column(String(64), default="", index=True)
+    source_rule_id = Column(String(128), default="")
+    source_rule_name = Column(String(128), default="")
+    source_version = Column(String(64), default="")
+    source_freshness = Column(String(16), default="unknown")
+    event_fingerprint = Column(String(255), default="", index=True)
+    correlation_key = Column(String(255), default="", index=True)
     attack_type = Column(String(64), nullable=False, index=True)  # sql_injection, xss, path_traversal, cmd_injection, scanner, etc.
     signature_matched = Column(String(128), default="")
     method = Column(String(16), default="")
@@ -24,6 +34,8 @@ class IDSEvent(Base):
     status = Column(String(32), default="new", index=True)  # new / investigating / mitigated / false_positive / closed
     review_note = Column(Text, default="")
     action_taken = Column(String(128), default="")
+    response_result = Column(String(32), default="")
+    response_detail = Column(Text, default="")
     risk_score = Column(Integer, default=0)  # 0-100
     confidence = Column(Integer, default=0)  # 0-100
     hit_count = Column(Integer, default=0)

@@ -246,6 +246,7 @@ watch(attacks, () => { if (worldData.value && mapContainerRef.value) drawAttackL
           <p class="subtitle">SECURITY SITUATION AWARENESS SYSTEM</p>
           <div class="line" />
         </div>
+        <p class="demo-disclaimer">本页仅用于态势可视化演示，不作为真实事件统计口径；请以 IDS 事件页的真实事件视图为准。</p>
       </div>
       <div class="header-right">
         <div class="stat-inline">
@@ -337,7 +338,7 @@ watch(attacks, () => { if (worldData.value && mapContainerRef.value) drawAttackL
 
       <aside class="attack-sidebar">
         <div class="sidebar-header">
-          <h2><span class="i-clock" /> 实时威胁监控</h2>
+          <h2><span class="i-clock" /> 可视化威胁演示</h2>
           <span class="online-badge"><span class="dot" /> 在线</span>
         </div>
         <div class="attack-list">
@@ -472,6 +473,13 @@ watch(attacks, () => { if (worldData.value && mapContainerRef.value) drawAttackL
   font-weight: 700;
   margin: 0;
   text-shadow: 0 0 14px rgba(34, 211, 238, 0.35);
+}
+.demo-disclaimer {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  letter-spacing: 0.04em;
+  text-align: center;
 }
 .header-right { display: flex; align-items: center; }
 .stat-inline { padding: 0 40px; border-left: 1px solid rgba(255,255,255,0.05); border-right: 1px solid rgba(255,255,255,0.05); text-align: right; }

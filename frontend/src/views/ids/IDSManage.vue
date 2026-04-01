@@ -189,6 +189,7 @@ watch(trendDays, () => fetchTrend())
     <div class="page-header">
       <h2>IDS 入侵检测</h2>
       <p class="page-desc">抓包解析 HTTP、特征匹配、攻击识别、留痕封禁、归档管理</p>
+      <div class="legacy-notice">Legacy IDS page: use `/security/ids` for the normalized real/demo-separated workflow.</div>
     </div>
 
     <div v-if="stats" class="stats-row">
@@ -321,6 +322,15 @@ watch(trendDays, () => fetchTrend())
 .page-header { margin-bottom: 20px; }
 .page-header h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
 .page-desc { margin: 0; font-size: 13px; color: var(--text-muted); }
+.legacy-notice {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.06);
+  color: #1d4ed8;
+  font-size: 12px;
+}
 
 .stats-row {
   display: flex;
