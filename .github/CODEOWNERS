@@ -1,0 +1,21 @@
+# Security Center ownership isolation
+# Replace @QijingGU and @your-security-collaborator with real GitHub IDs
+
+# Default owner for whole repository
+* @QijingGU
+
+# ===== Security Center Frontend =====
+/frontend/src/views/security/ @QijingGU @your-security-collaborator
+/frontend/src/views/ids/ @QijingGU @your-security-collaborator
+/frontend/src/styles/security-hud-shared.scss @QijingGU @your-security-collaborator
+
+# ===== Security Center Backend =====
+/backend/app/api/ids.py @QijingGU @your-security-collaborator
+/backend/app/middleware/ids_middleware.py @QijingGU @your-security-collaborator
+/backend/app/models/ids_event.py @QijingGU @your-security-collaborator
+/backend/app/services/ids_engine.py @QijingGU @your-security-collaborator
+/backend/app/services/ids_ai_analysis.py @QijingGU @your-security-collaborator
+
+# ===== Security dashboards & related APIs =====
+/frontend/src/views/screen/SupplyChainOverviewScreen.vue @QijingGU @your-security-collaborator
+/backend/app/api/overview.py @QijingGU @your-security-collaborator
