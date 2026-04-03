@@ -437,3 +437,12 @@ security-center workflows change.
     state when API calls stall.
 - Validation for UI/stability fix:
   - frontend `npm run build` passes after IDS audit page/style refactor.
+- UI redesign follow-up for reviewer acceptance:
+  - rebuilt `frontend/src/views/security/SecurityIDSAudit.vue` again with a
+    tighter operations-panel visual language aligned to Security Center,
+  - switched to clearer Chinese-first wording for all section labels, filters,
+    and table columns,
+  - increased contrast between background/panel/text colors to improve
+    readability and reduce low-contrast blur.
+- Validation for redesign pass:
+  - frontend `npm run build` passes after the `/security/audit` redesign.

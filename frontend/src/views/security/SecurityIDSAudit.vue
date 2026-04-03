@@ -70,6 +70,9 @@ const idsSuccessCount = computed(() => summaryCountFrom(summary.value.ids_by_out
 const idsRejectedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'rejected'))
 const idsFailedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'failed'))
 const idsSkippedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'skipped'))
+const sourceSyncCount = computed(() => summaryCountFrom(summary.value.ids_by_domain, 'source_sync'))
+const sourcePackageCount = computed(() => summaryCountFrom(summary.value.ids_by_domain, 'source_package'))
+const rulepackCount = computed(() => summaryCountFrom(summary.value.ids_by_domain, 'rulepack'))
 
 function getActionLabel(action: string): string {
   return actionLabels[action] || action
@@ -165,7 +168,7 @@ async function fetchData(showError = false) {
     tableData.value = []
     total.value = 0
     summary.value = emptySummary
-    if (showError) ElMessage.error('IDS 审计数据加载失败，请重试')
+    if (showError) ElMessage.error('IDS 审计数据加载失败，请检查服务后重试')
   } finally {
     if (currentSeq === fetchSeq) loading.value = false
   }
@@ -220,202 +223,237 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="security-audit-page">
-    <header class="audit-header">
-      <div class="header-chip">安全中心 / IDS 审计追踪</div>
-      <h1 class="header-title">IDS 审计追踪</h1>
-      <p class="header-subtitle">专门追踪规则源、规则包和运行规则包的关键操作，不与业务日常审计混在一起。</p>
+  <div class="ids-audit-page">
+    <header class="audit-hero">
+      <div class="audit-hero__meta">
+        <span class="meta-dot" />
+        <span class="meta-text">安全中心 / IDS 审计追踪</span>
+        <span class="meta-badge">仅 IDS 关键操作</span>
+      </div>
+      <h1 class="audit-hero__title">IDS 审计追踪</h1>
+      <p class="audit-hero__desc">用于追溯规则源、规则包、运行规则包相关操作，帮助定位“谁在什么时候做了什么”。</p>
     </header>
 
-    <main class="audit-main">
-      <section class="summary-grid">
-        <article class="summary-card">
-          <span class="summary-label">IDS 日志总量</span>
-          <span class="summary-value">{{ summary.ids_count }}</span>
-        </article>
-        <article class="summary-card summary-card--ok">
-          <span class="summary-label">成功</span>
-          <span class="summary-value">{{ idsSuccessCount }}</span>
-        </article>
-        <article class="summary-card summary-card--warn">
-          <span class="summary-label">被拒绝</span>
-          <span class="summary-value">{{ idsRejectedCount }}</span>
-        </article>
-        <article class="summary-card summary-card--danger">
-          <span class="summary-label">失败</span>
-          <span class="summary-value">{{ idsFailedCount }}</span>
-        </article>
-        <article class="summary-card summary-card--neutral">
-          <span class="summary-label">跳过</span>
-          <span class="summary-value">{{ idsSkippedCount }}</span>
-        </article>
-      </section>
+    <section class="summary-grid">
+      <article class="summary-card">
+        <span class="summary-label">日志总量</span>
+        <span class="summary-value">{{ summary.ids_count }}</span>
+      </article>
+      <article class="summary-card summary-card--ok">
+        <span class="summary-label">成功</span>
+        <span class="summary-value">{{ idsSuccessCount }}</span>
+      </article>
+      <article class="summary-card summary-card--warn">
+        <span class="summary-label">被拒绝</span>
+        <span class="summary-value">{{ idsRejectedCount }}</span>
+      </article>
+      <article class="summary-card summary-card--danger">
+        <span class="summary-label">失败</span>
+        <span class="summary-value">{{ idsFailedCount }}</span>
+      </article>
+      <article class="summary-card summary-card--neutral">
+        <span class="summary-label">跳过</span>
+        <span class="summary-value">{{ idsSkippedCount }}</span>
+      </article>
+    </section>
 
-      <section class="filter-panel">
-        <div class="filter-row">
-          <el-select v-model="actionFilter" placeholder="动作类型" clearable class="field-sm">
-            <el-option v-for="item in actionOptions" :key="item" :label="getActionLabel(item)" :value="item" />
-          </el-select>
-          <el-select v-model="idsDomainFilter" placeholder="IDS 模块" clearable class="field-sm">
-            <el-option v-for="item in idsDomainOptions" :key="item" :label="getDomainLabel(item)" :value="item" />
-          </el-select>
-          <el-select v-model="idsOutcomeFilter" placeholder="处理结果" clearable class="field-sm">
-            <el-option v-for="item in idsOutcomeOptions" :key="item" :label="getOutcomeLabel(item)" :value="item" />
-          </el-select>
-          <el-select v-model="targetTypeFilter" placeholder="对象类型" clearable class="field-sm">
-            <el-option v-for="item in targetTypeOptions" :key="item" :label="item" :value="item" />
-          </el-select>
-          <el-input v-model="userFilter" placeholder="操作人" clearable class="field-sm" />
-          <el-input v-model="keywordFilter" placeholder="关键词（详情/对象ID）" clearable class="field-lg" />
-          <el-date-picker
-            v-model="timeRange"
-            type="datetimerange"
-            value-format="YYYY-MM-DDTHH:mm:ss"
-            range-separator="至"
-            start-placeholder="开始时间"
-            end-placeholder="结束时间"
-            class="field-date"
-          />
+    <section class="sec-panel">
+      <div class="sec-panel__head">
+        <span class="sec-panel__title">筛选条件</span>
+        <div class="sec-panel__actions">
           <el-button type="primary" @click="search">查询</el-button>
           <el-button @click="resetFilters">重置</el-button>
           <el-button @click="refresh">刷新</el-button>
         </div>
-        <div class="quick-row">
-          <el-button text @click="setRangeByDays(1)">近 24 小时</el-button>
-          <el-button text @click="setRangeByDays(3)">近 3 天</el-button>
-          <el-button text @click="setRangeByDays(7)">近 7 天</el-button>
-        </div>
-      </section>
+      </div>
 
-      <section class="table-panel">
-        <el-table :data="tableData" v-loading="loading" class="audit-table" stripe>
-          <el-table-column prop="created_at" label="时间" width="188">
-            <template #default="{ row }">{{ row.created_at ? row.created_at.slice(0, 19).replace('T', ' ') : '-' }}</template>
-          </el-table-column>
-          <el-table-column prop="user_name" label="操作人" width="132" />
-          <el-table-column prop="action" label="动作" width="230">
-            <template #default="{ row }">
-              <el-tag size="small" type="success">{{ getActionLabel(row.action) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="IDS 模块" width="132">
-            <template #default="{ row }">{{ getDomainLabel(row.ids_domain) }}</template>
-          </el-table-column>
-          <el-table-column label="处理结果" width="112">
-            <template #default="{ row }">
-              <el-tag size="small" :type="outcomeType(row.ids_outcome)">{{ getOutcomeLabel(row.ids_outcome) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="target_type" label="对象类型" width="122" />
-          <el-table-column prop="target_id" label="对象 ID" width="180" show-overflow-tooltip />
-          <el-table-column prop="detail" label="详情" min-width="340" show-overflow-tooltip />
-        </el-table>
-
-        <div v-if="!loading && tableData.length === 0" class="empty-state">
-          当前筛选条件下没有 IDS 审计记录
-        </div>
-
-        <el-pagination
-          background
-          class="pager"
-          layout="total, sizes, prev, pager, next, jumper"
-          :total="total"
-          :current-page="page"
-          :page-size="pageSize"
-          :page-sizes="[20, 50, 100, 200]"
-          @update:current-page="onPageChange"
-          @update:page-size="onPageSizeChange"
+      <div class="filter-grid">
+        <el-select v-model="actionFilter" placeholder="动作类型" clearable class="field-sm">
+          <el-option v-for="item in actionOptions" :key="item" :label="getActionLabel(item)" :value="item" />
+        </el-select>
+        <el-select v-model="idsDomainFilter" placeholder="IDS 模块" clearable class="field-sm">
+          <el-option v-for="item in idsDomainOptions" :key="item" :label="getDomainLabel(item)" :value="item" />
+        </el-select>
+        <el-select v-model="idsOutcomeFilter" placeholder="处理结果" clearable class="field-sm">
+          <el-option v-for="item in idsOutcomeOptions" :key="item" :label="getOutcomeLabel(item)" :value="item" />
+        </el-select>
+        <el-select v-model="targetTypeFilter" placeholder="对象类型" clearable class="field-sm">
+          <el-option v-for="item in targetTypeOptions" :key="item" :label="item" :value="item" />
+        </el-select>
+        <el-input v-model="userFilter" placeholder="操作人" clearable class="field-sm" />
+        <el-input v-model="keywordFilter" placeholder="关键词（详情/对象ID）" clearable class="field-lg" />
+        <el-date-picker
+          v-model="timeRange"
+          type="datetimerange"
+          value-format="YYYY-MM-DDTHH:mm:ss"
+          range-separator="至"
+          start-placeholder="开始时间"
+          end-placeholder="结束时间"
+          class="field-date"
         />
-      </section>
-    </main>
+      </div>
+
+      <div class="quick-row">
+        <el-button text @click="setRangeByDays(1)">近 24 小时</el-button>
+        <el-button text @click="setRangeByDays(3)">近 3 天</el-button>
+        <el-button text @click="setRangeByDays(7)">近 7 天</el-button>
+      </div>
+    </section>
+
+    <section class="sec-panel table-panel">
+      <div class="sec-panel__head">
+        <span class="sec-panel__title">审计记录</span>
+        <div class="domain-strip">
+          <span class="domain-strip__item">规则源同步 {{ sourceSyncCount }}</span>
+          <span class="domain-strip__item">规则包管理 {{ sourcePackageCount }}</span>
+          <span class="domain-strip__item">运行规则包 {{ rulepackCount }}</span>
+        </div>
+      </div>
+
+      <el-table :data="tableData" v-loading="loading" class="audit-table" stripe>
+        <el-table-column prop="created_at" label="时间" width="188">
+          <template #default="{ row }">{{ row.created_at ? row.created_at.slice(0, 19).replace('T', ' ') : '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="user_name" label="操作人" width="132" />
+        <el-table-column prop="action" label="动作" width="230">
+          <template #default="{ row }">
+            <el-tag size="small" type="success">{{ getActionLabel(row.action) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="IDS 模块" width="132">
+          <template #default="{ row }">{{ getDomainLabel(row.ids_domain) }}</template>
+        </el-table-column>
+        <el-table-column label="处理结果" width="112">
+          <template #default="{ row }">
+            <el-tag size="small" :type="outcomeType(row.ids_outcome)">{{ getOutcomeLabel(row.ids_outcome) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="target_type" label="对象类型" width="122" />
+        <el-table-column prop="target_id" label="对象 ID" width="180" show-overflow-tooltip />
+        <el-table-column prop="detail" label="详情" min-width="340" show-overflow-tooltip />
+      </el-table>
+
+      <div v-if="!loading && tableData.length === 0" class="empty-state">当前筛选条件下没有 IDS 审计记录</div>
+
+      <el-pagination
+        background
+        class="pager"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="total"
+        :current-page="page"
+        :page-size="pageSize"
+        :page-sizes="[20, 50, 100, 200]"
+        @update:current-page="onPageChange"
+        @update:page-size="onPageSizeChange"
+      />
+    </section>
   </div>
 </template>
 
 <style scoped>
-.security-audit-page {
-  --bg-0: #060b1b;
-  --bg-1: #0b1530;
-  --panel: rgba(9, 20, 42, 0.9);
-  --panel-border: rgba(94, 168, 255, 0.26);
-  --text-main: #f3f7ff;
-  --text-sub: #c8d8f0;
-  --text-muted: #97abcd;
-  --accent: #4da3ff;
-  --ok: #34d399;
+.ids-audit-page {
+  --bg-base: #040b16;
+  --bg-panel: rgba(6, 18, 39, 0.92);
+  --bg-panel-top: rgba(8, 34, 68, 0.6);
+  --line-main: rgba(65, 157, 255, 0.32);
+  --line-soft: rgba(55, 124, 203, 0.24);
+  --text-main: #f2f8ff;
+  --text-sub: #c2d4ed;
+  --text-muted: #8ea7c5;
+  --brand: #61b6ff;
+  --ok: #22c55e;
   --warn: #f59e0b;
   --danger: #ef4444;
-  --font-cn: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+  --font-cn: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
 
   min-height: 100%;
-  padding: 22px;
-  background:
-    radial-gradient(circle at 8% 8%, rgba(77, 163, 255, 0.22), transparent 36%),
-    radial-gradient(circle at 96% 0%, rgba(56, 189, 248, 0.14), transparent 34%),
-    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
-  color: var(--text-main);
+  padding: 16px 18px 18px;
   font-family: var(--font-cn);
+  color: var(--text-main);
+  background:
+    radial-gradient(circle at 0 0, rgba(16, 78, 147, 0.28), transparent 38%),
+    radial-gradient(circle at 100% 0, rgba(11, 103, 172, 0.18), transparent 36%),
+    var(--bg-base);
 }
 
-.audit-header {
-  margin-bottom: 16px;
+.audit-hero {
+  border: 1px solid var(--line-main);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(9, 28, 55, 0.9), rgba(5, 18, 37, 0.9));
+  padding: 14px 16px 12px;
+  margin-bottom: 12px;
 }
 
-.header-chip {
-  display: inline-flex;
+.audit-hero__meta {
+  display: flex;
   align-items: center;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(77, 163, 255, 0.45);
-  background: rgba(77, 163, 255, 0.12);
-  color: #bfdbfe;
-  font-size: 12px;
-  letter-spacing: 0.03em;
+  gap: 8px;
 }
 
-.header-title {
-  margin: 10px 0 4px;
-  font-size: 34px;
-  line-height: 1.12;
-  font-weight: 800;
+.meta-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #39d2ff;
+  box-shadow: 0 0 10px rgba(57, 210, 255, 0.6);
+}
+
+.meta-text {
+  color: #9cc5ef;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.meta-badge {
+  margin-left: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  border-radius: 8px;
+  padding: 0 8px;
+  border: 1px solid rgba(110, 255, 180, 0.5);
+  color: #9af9c5;
+  background: rgba(27, 94, 59, 0.36);
+}
+
+.audit-hero__title {
+  margin: 8px 0 4px;
+  font-size: 28px;
+  line-height: 1.2;
+  font-weight: 700;
   color: var(--text-main);
 }
 
-.header-subtitle {
+.audit-hero__desc {
   margin: 0;
+  font-size: 13px;
   color: var(--text-sub);
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-.audit-main {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  line-height: 1.5;
 }
 
 .summary-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
+  margin-bottom: 12px;
 }
 
 .summary-card {
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  background: var(--panel);
-  padding: 14px;
+  background: linear-gradient(180deg, rgba(8, 33, 69, 0.84), rgba(5, 18, 39, 0.9));
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 12px 14px;
 }
 
 .summary-card--ok {
-  border-color: rgba(52, 211, 153, 0.48);
+  border-color: rgba(34, 197, 94, 0.44);
 }
 
 .summary-card--warn {
-  border-color: rgba(245, 158, 11, 0.48);
+  border-color: rgba(245, 158, 11, 0.44);
 }
 
 .summary-card--danger {
-  border-color: rgba(239, 68, 68, 0.48);
+  border-color: rgba(239, 68, 68, 0.44);
 }
 
 .summary-card--neutral {
@@ -423,38 +461,59 @@ onMounted(() => {
 }
 
 .summary-label {
-  display: block;
-  color: var(--text-sub);
   font-size: 12px;
+  color: var(--text-sub);
 }
 
 .summary-value {
   display: block;
   margin-top: 8px;
-  font-size: 28px;
+  font-size: 30px;
   line-height: 1;
-  font-weight: 800;
+  font-weight: 700;
   color: #ffffff;
 }
 
-.filter-panel,
-.table-panel {
-  border: 1px solid var(--panel-border);
+.sec-panel {
+  border: 1px solid var(--line-main);
   border-radius: 12px;
-  background: var(--panel);
+  background: linear-gradient(180deg, var(--bg-panel-top), var(--bg-panel));
   padding: 12px;
 }
 
-.filter-row {
+.sec-panel + .sec-panel {
+  margin-top: 12px;
+}
+
+.sec-panel__head {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.sec-panel__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #d8ebff;
+}
+
+.sec-panel__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.filter-grid {
+  display: flex;
   flex-wrap: wrap;
+  gap: 10px;
 }
 
 .quick-row {
-  margin-top: 6px;
+  margin-top: 8px;
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .field-sm {
@@ -462,11 +521,27 @@ onMounted(() => {
 }
 
 .field-lg {
-  width: 240px;
+  width: 250px;
 }
 
 .field-date {
-  width: 350px;
+  width: 360px;
+}
+
+.domain-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.domain-strip__item {
+  border: 1px solid rgba(108, 166, 240, 0.3);
+  border-radius: 8px;
+  color: #b8d7fa;
+  background: rgba(10, 34, 67, 0.66);
+  font-size: 12px;
+  padding: 2px 8px;
 }
 
 .audit-table :deep(.el-table),
@@ -477,20 +552,20 @@ onMounted(() => {
 }
 
 .audit-table :deep(th.el-table__cell) {
-  background: rgba(17, 31, 62, 0.92);
-  color: #dbeafe;
+  background: rgba(11, 43, 79, 0.92);
+  color: #d5e9ff;
   font-weight: 600;
 }
 
 .audit-table :deep(td.el-table__cell) {
-  background: rgba(8, 16, 34, 0.76);
-  color: #eef4ff;
+  background: rgba(5, 19, 40, 0.82);
+  color: #edf5ff;
 }
 
 .empty-state {
   margin-top: 10px;
-  color: var(--text-muted);
   text-align: center;
+  color: var(--text-muted);
   font-size: 13px;
 }
 
@@ -499,23 +574,35 @@ onMounted(() => {
   justify-content: flex-end;
 }
 
-.security-audit-page :deep(.el-input__wrapper),
-.security-audit-page :deep(.el-select__wrapper),
-.security-audit-page :deep(.el-range-editor.el-input__wrapper) {
-  background: rgba(7, 16, 34, 0.92);
-  box-shadow: 0 0 0 1px rgba(129, 169, 232, 0.24) inset;
+.ids-audit-page :deep(.el-input__wrapper),
+.ids-audit-page :deep(.el-select__wrapper),
+.ids-audit-page :deep(.el-range-editor.el-input__wrapper) {
+  background: rgba(6, 19, 40, 0.9);
+  box-shadow: 0 0 0 1px rgba(97, 182, 255, 0.28) inset;
 }
 
-.security-audit-page :deep(.el-input__inner),
-.security-audit-page :deep(.el-select__placeholder),
-.security-audit-page :deep(.el-select__selected-item),
-.security-audit-page :deep(.el-range-input) {
-  color: #eef4ff;
+.ids-audit-page :deep(.el-input__inner),
+.ids-audit-page :deep(.el-select__placeholder),
+.ids-audit-page :deep(.el-select__selected-item),
+.ids-audit-page :deep(.el-range-input),
+.ids-audit-page :deep(.el-range-separator) {
+  color: #ecf4ff;
 }
 
-.security-audit-page :deep(.el-input__inner::placeholder),
-.security-audit-page :deep(.el-range-input::placeholder) {
-  color: #9fb5d8;
+.ids-audit-page :deep(.el-input__inner::placeholder),
+.ids-audit-page :deep(.el-range-input::placeholder) {
+  color: #94b5da;
+}
+
+.ids-audit-page :deep(.el-button--default) {
+  background: rgba(8, 28, 57, 0.9);
+  border-color: rgba(112, 171, 243, 0.34);
+  color: #dbeafe;
+}
+
+.ids-audit-page :deep(.el-button--primary) {
+  border-color: #3b82f6;
+  background: linear-gradient(180deg, #3b82f6, #2563eb);
 }
 
 @media (max-width: 1360px) {
@@ -525,18 +612,27 @@ onMounted(() => {
 }
 
 @media (max-width: 1024px) {
-  .security-audit-page {
-    padding: 16px;
+  .ids-audit-page {
+    padding: 12px;
+  }
+
+  .audit-hero__title {
+    font-size: 24px;
   }
 
   .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .field-date,
   .field-sm,
-  .field-lg {
+  .field-lg,
+  .field-date {
     width: 100%;
+  }
+
+  .sec-panel__head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 </style>

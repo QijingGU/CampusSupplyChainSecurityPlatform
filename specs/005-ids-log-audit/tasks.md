@@ -41,3 +41,4 @@
 - [X] T021 Re-run backend/frontend validation and append daily IDS changelog entry in `docs/ids-changelog.md`
 - [X] T022 Fix security-center route loading regression for `/security/audit` in `frontend/src/views/security/SecurityCenterLayout.vue`
 - [X] T023 Refactor `frontend/src/views/security/SecurityIDSAudit.vue` for readable Chinese copy, stronger contrast, and resilient loading/error handling
+- [X] T024 Redesign `/security/audit` visual style to match security-center operations panel (Chinese-first, high-contrast, compact dark layout) in `frontend/src/views/security/SecurityIDSAudit.vue`
