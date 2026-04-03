@@ -268,16 +268,16 @@ onMounted(() => {
       </div>
 
       <div class="filter-grid">
-        <el-select v-model="actionFilter" placeholder="动作类型" clearable class="field-sm">
+        <el-select v-model="actionFilter" placeholder="动作类型" clearable class="field-sm" popper-class="ids-audit-popper">
           <el-option v-for="item in actionOptions" :key="item" :label="getActionLabel(item)" :value="item" />
         </el-select>
-        <el-select v-model="idsDomainFilter" placeholder="IDS 模块" clearable class="field-sm">
+        <el-select v-model="idsDomainFilter" placeholder="IDS 模块" clearable class="field-sm" popper-class="ids-audit-popper">
           <el-option v-for="item in idsDomainOptions" :key="item" :label="getDomainLabel(item)" :value="item" />
         </el-select>
-        <el-select v-model="idsOutcomeFilter" placeholder="处理结果" clearable class="field-sm">
+        <el-select v-model="idsOutcomeFilter" placeholder="处理结果" clearable class="field-sm" popper-class="ids-audit-popper">
           <el-option v-for="item in idsOutcomeOptions" :key="item" :label="getOutcomeLabel(item)" :value="item" />
         </el-select>
-        <el-select v-model="targetTypeFilter" placeholder="对象类型" clearable class="field-sm">
+        <el-select v-model="targetTypeFilter" placeholder="对象类型" clearable class="field-sm" popper-class="ids-audit-popper">
           <el-option v-for="item in targetTypeOptions" :key="item" :label="item" :value="item" />
         </el-select>
         <el-input v-model="userFilter" placeholder="操作人" clearable class="field-sm" />
@@ -290,6 +290,7 @@ onMounted(() => {
           start-placeholder="开始时间"
           end-placeholder="结束时间"
           class="field-date"
+          popper-class="ids-audit-popper"
         />
       </div>
 
@@ -329,8 +330,8 @@ onMounted(() => {
           </template>
         </el-table-column>
         <el-table-column prop="target_type" label="对象类型" width="122" />
-        <el-table-column prop="target_id" label="对象 ID" width="180" show-overflow-tooltip />
-        <el-table-column prop="detail" label="详情" min-width="340" show-overflow-tooltip />
+        <el-table-column prop="target_id" label="对象 ID" width="180" :show-overflow-tooltip="{ popperClass: 'ids-audit-tooltip' }" />
+        <el-table-column prop="detail" label="详情" min-width="340" :show-overflow-tooltip="{ popperClass: 'ids-audit-tooltip' }" />
       </el-table>
 
       <div v-if="!loading && tableData.length === 0" class="empty-state">当前筛选条件下没有 IDS 审计记录</div>
@@ -354,19 +355,19 @@ onMounted(() => {
 .ids-audit-page {
   min-height: 100%;
   padding: 14px 16px 16px;
-  color: #eaf4ff;
+  color: #edf6ff;
   font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   background:
-    radial-gradient(circle at 6% 4%, rgba(34, 99, 180, 0.24), transparent 34%),
-    radial-gradient(circle at 98% 0, rgba(35, 123, 214, 0.16), transparent 36%),
-    #050d1b;
+    radial-gradient(circle at 6% 4%, rgba(27, 78, 143, 0.2), transparent 34%),
+    radial-gradient(circle at 98% 0, rgba(26, 96, 167, 0.14), transparent 36%),
+    #030915;
 }
 
 .audit-hero {
   padding: 14px 16px 13px;
   border-radius: 12px;
   border: 1px solid rgba(89, 156, 230, 0.32);
-  background: linear-gradient(180deg, rgba(9, 34, 68, 0.92), rgba(5, 18, 38, 0.95));
+  background: linear-gradient(180deg, rgba(8, 28, 55, 0.94), rgba(4, 14, 30, 0.96));
   box-shadow: inset 0 1px 0 rgba(132, 186, 251, 0.15);
   margin-bottom: 12px;
 }
@@ -427,7 +428,7 @@ onMounted(() => {
 .summary-card {
   border: 1px solid rgba(70, 136, 209, 0.28);
   border-radius: 10px;
-  background: linear-gradient(180deg, rgba(8, 30, 60, 0.92), rgba(5, 17, 36, 0.92));
+  background: linear-gradient(180deg, rgba(7, 24, 47, 0.94), rgba(4, 13, 27, 0.94));
   padding: 12px 13px;
 }
 
@@ -465,7 +466,7 @@ onMounted(() => {
   padding: 12px;
   border: 1px solid rgba(86, 151, 224, 0.32);
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(8, 29, 57, 0.86), rgba(5, 17, 37, 0.95));
+  background: linear-gradient(180deg, rgba(7, 25, 49, 0.9), rgba(4, 13, 30, 0.97));
 }
 
 .sec-panel + .sec-panel {
@@ -531,6 +532,12 @@ onMounted(() => {
   font-size: 12px;
 }
 
+.domain-strip__item:hover {
+  color: #f3f9ff;
+  border-color: rgba(142, 194, 255, 0.46);
+  background: rgba(12, 39, 73, 0.9);
+}
+
 .audit-table :deep(.el-table),
 .audit-table :deep(.el-table__inner-wrapper),
 .audit-table :deep(.el-table__header-wrapper),
@@ -546,11 +553,16 @@ onMounted(() => {
 
 .audit-table :deep(td.el-table__cell) {
   color: #ebf4ff !important;
-  background: rgba(6, 21, 43, 0.88) !important;
+  background: rgba(5, 16, 34, 0.9) !important;
 }
 
 .audit-table :deep(.el-table__body tr.el-table__row--striped td.el-table__cell) {
-  background: rgba(10, 33, 64, 0.88) !important;
+  background: rgba(8, 26, 51, 0.9) !important;
+}
+
+.audit-table :deep(.el-table__body tr:hover > td.el-table__cell) {
+  background: rgba(14, 40, 76, 0.95) !important;
+  color: #f4f9ff !important;
 }
 
 .empty-state {
@@ -568,8 +580,17 @@ onMounted(() => {
 .ids-audit-page :deep(.el-input__wrapper),
 .ids-audit-page :deep(.el-select__wrapper),
 .ids-audit-page :deep(.el-range-editor.el-input__wrapper) {
-  background: #0a223f !important;
-  box-shadow: 0 0 0 1px rgba(102, 165, 237, 0.35) inset !important;
+  background: #071a33 !important;
+  box-shadow: 0 0 0 1px rgba(102, 165, 237, 0.3) inset !important;
+}
+
+.ids-audit-page :deep(.el-input__wrapper:hover),
+.ids-audit-page :deep(.el-select__wrapper:hover),
+.ids-audit-page :deep(.el-range-editor.el-input__wrapper:hover),
+.ids-audit-page :deep(.el-input__wrapper.is-focus),
+.ids-audit-page :deep(.el-select__wrapper.is-focused),
+.ids-audit-page :deep(.el-range-editor.el-input__wrapper.is-focus) {
+  box-shadow: 0 0 0 1px rgba(133, 191, 255, 0.56) inset !important;
 }
 
 .ids-audit-page :deep(.el-input__inner),
@@ -591,9 +612,52 @@ onMounted(() => {
   color: #ddedff !important;
 }
 
+.ids-audit-page :deep(.el-button--default:hover) {
+  background: rgba(15, 47, 88, 0.95) !important;
+  border-color: rgba(140, 197, 255, 0.48) !important;
+  color: #f4f9ff !important;
+}
+
 .ids-audit-page :deep(.el-button--primary) {
   background: linear-gradient(180deg, #3f8dff, #296de0) !important;
   border-color: #3f8dff !important;
+}
+
+.ids-audit-page :deep(.el-button.is-text) {
+  color: #9fc6f0 !important;
+}
+
+.ids-audit-page :deep(.el-button.is-text:hover) {
+  color: #edf5ff !important;
+  background: rgba(37, 82, 135, 0.26) !important;
+}
+
+:global(.ids-audit-popper) {
+  border: 1px solid rgba(119, 173, 240, 0.38) !important;
+  background: rgba(7, 24, 46, 0.98) !important;
+}
+
+:global(.ids-audit-popper .el-select-dropdown__item) {
+  color: #e9f4ff !important;
+}
+
+:global(.ids-audit-popper .el-select-dropdown__item.hover),
+:global(.ids-audit-popper .el-select-dropdown__item:hover) {
+  color: #ffffff !important;
+  background: rgba(47, 107, 176, 0.5) !important;
+}
+
+:global(.ids-audit-popper .el-picker-panel),
+:global(.ids-audit-popper .el-date-range-picker),
+:global(.ids-audit-popper .el-date-range-picker__content) {
+  background: rgba(7, 24, 46, 0.98) !important;
+  color: #ebf5ff !important;
+}
+
+:global(.ids-audit-tooltip.el-popper) {
+  background: rgba(8, 28, 52, 0.98) !important;
+  border: 1px solid rgba(122, 178, 247, 0.4) !important;
+  color: #f2f8ff !important;
 }
 
 @media (max-width: 1360px) {
