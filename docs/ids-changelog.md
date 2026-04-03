@@ -400,3 +400,28 @@ security-center workflows change.
 - Validation for the hardening pass:
   - Python `py_compile` passes for `backend/app/api/audit.py`,
   - frontend `npm run build` passes after audit and IDS wording updates.
+- Continued production-focused audit split and UI consolidation:
+  - moved IDS audit operations to a dedicated security-center page
+    `frontend/src/views/security/SecurityIDSAudit.vue` at `/security/audit`,
+  - updated `frontend/src/views/security/SecurityCenterLayout.vue` and
+    `frontend/src/router/routes.ts` so IDS review is accessed from Security
+    Center navigation,
+  - changed generic `frontend/src/views/audit/AuditLogs.vue` to business/daily
+    supervision mode and exclude IDS rows by default.
+- Backend/API update for audit separation:
+  - added `exclude_ids` query support to `GET /api/audit` in
+    `backend/app/api/audit.py`,
+  - aligned frontend audit params in `frontend/src/api/audit.ts`.
+- IDS terminology and demo-isolation hardening:
+  - replaced mechanical wording around detector family with clearer
+    “检测场景” and plain-language hints in
+    `frontend/src/views/security/SecurityIDS.vue`,
+  - added `VITE_IDS_ENABLE_DEMO` gate so demo/test operation controls are
+    hidden by default in production-facing workflows.
+- Spec Kit alignment pass:
+  - synchronized `specs/005-ids-log-audit/spec.md` and
+    `specs/005-ids-log-audit/tasks.md` with the split model
+    (`/audit` for business, `/security/audit` for IDS).
+- Validation for this pass:
+  - Python `py_compile` passes for `backend/app/api/audit.py`,
+  - frontend `npm run build` passes after route/layout/audit/IDS updates.

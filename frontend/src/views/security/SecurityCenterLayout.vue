@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Lock, Monitor, ArrowLeft, FolderOpened } from '@element-plus/icons-vue'
+import { Lock, Monitor, ArrowLeft, FolderOpened, Document } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -9,11 +9,11 @@ const loading = ref(true)
 
 const navItems = [
   { path: '/security/ids', label: 'IDS 入侵检测', icon: Lock },
+  { path: '/security/audit', label: 'IDS 审计追踪', icon: Document },
   { path: '/security/situation', label: '安全态势感知', icon: Monitor },
   { path: '/security/sandbox', label: '安全沙箱', icon: FolderOpened },
 ]
 
-// 安全中心仅管理员可访问，返回时跳转到管理员默认入口（用户管理）
 function goBack() {
   router.push('/user')
 }
@@ -29,7 +29,9 @@ const isActive = (path: string) => route.path === path || route.path.startsWith(
 let loadTimer: ReturnType<typeof setTimeout> | null = null
 onMounted(() => {
   document.body.classList.add('security-center-active')
-  loadTimer = setTimeout(() => { loading.value = false }, 280)
+  loadTimer = setTimeout(() => {
+    loading.value = false
+  }, 280)
 })
 onBeforeUnmount(() => {
   document.body.classList.remove('security-center-active')
@@ -98,6 +100,7 @@ onBeforeUnmount(() => {
   z-index: 1000;
   backdrop-filter: blur(8px);
 }
+
 .loading-spinner {
   width: 48px;
   height: 48px;
@@ -106,9 +109,13 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
+
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
+
 .loading-text {
   font-size: 14px;
   font-family: monospace;
@@ -124,6 +131,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   flex-shrink: 0;
 }
+
 .nav-back {
   padding: 18px 20px;
   display: flex;
@@ -135,15 +143,18 @@ onBeforeUnmount(() => {
   transition: color 0.2s;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
+
 .nav-back:hover {
   color: #3b82f6;
 }
+
 .nav-header {
   padding: 22px 20px 26px;
   display: flex;
   align-items: center;
   gap: 12px;
 }
+
 .nav-logo {
   width: 48px;
   height: 48px;
@@ -155,16 +166,19 @@ onBeforeUnmount(() => {
   justify-content: center;
   color: #3b82f6;
 }
+
 .nav-title {
   font-size: 18px;
   font-weight: 700;
   color: #fff;
   letter-spacing: 0.02em;
 }
+
 .nav-list {
   flex: 1;
   padding: 12px 12px 20px;
 }
+
 .nav-item {
   display: flex;
   align-items: center;
@@ -179,10 +193,12 @@ onBeforeUnmount(() => {
   transition: all 0.2s;
   margin-bottom: 8px;
 }
+
 .nav-item:hover {
   background: rgba(255, 255, 255, 0.05);
   color: rgba(255, 255, 255, 0.9);
 }
+
 .nav-item.active {
   background: rgba(59, 130, 246, 0.15);
   color: #3b82f6;
@@ -201,6 +217,7 @@ onBeforeUnmount(() => {
 .fade-leave-active {
   transition: opacity 0.2s ease;
 }
+
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;

@@ -176,12 +176,12 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/user/UserManage.vue'),
         meta: { title: '用户管理', icon: 'User', roles: ['system_admin'] },
       },
-      // 审计日志 + 异常监督 - 管理员
+      // 业务审计与日常监管 - 管理员
       {
         path: 'audit',
         name: 'AuditLogs',
         component: () => import('@/views/audit/AuditLogs.vue'),
-        meta: { title: '审计与异常监督', icon: 'Monitor', roles: ['system_admin'] },
+        meta: { title: '业务审计与日常监管', icon: 'Monitor', roles: ['system_admin'] },
       },
       // 安全中心 - 点击后跳转独立界面，内含 IDS / 安全态势感知
       {
@@ -195,6 +195,12 @@ export const routes: RouteRecordRaw[] = [
             name: 'IDSManage',
             component: () => import('@/views/security/SecurityIDS.vue'),
             meta: { title: 'IDS 入侵检测', hideInMenu: true, roles: ['system_admin'] },
+          },
+          {
+            path: 'audit',
+            name: 'SecurityIDSAudit',
+            component: () => import('@/views/security/SecurityIDSAudit.vue'),
+            meta: { title: 'IDS 审计追踪', hideInMenu: true, roles: ['system_admin'] },
           },
           {
             path: 'situation',

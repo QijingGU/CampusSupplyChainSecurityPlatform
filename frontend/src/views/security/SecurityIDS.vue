@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted, watch, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { DeleteFilled } from '@element-plus/icons-vue'
@@ -49,6 +50,7 @@ import type {
 type SourceFormState = IDSSourceRegistryPayload
 type PackagePreviewFormState = IDSSourcePackagePreviewPayload
 type PackageActivationFormState = { package_intake_id: number; triggered_by: string; activation_note: string }
+const router = useRouter()
 
 const loading = ref(false)
 const trendDays = ref(7)
@@ -128,6 +130,7 @@ const phase1UnlockCounter = ref(0)
 const phase2UnlockCounter = ref(0)
 const phase1Unlocked = ref(false)
 const phase2Unlocked = ref(false)
+const demoOpsEnabled = String(import.meta.env.VITE_IDS_ENABLE_DEMO || '').toLowerCase() === 'true'
 let phase1UnlockTimer: ReturnType<typeof setTimeout> | null = null
 let phase2UnlockTimer: ReturnType<typeof setTimeout> | null = null
 const clearArmed = ref(false)
@@ -401,6 +404,10 @@ async function fetchRulepacks() {
   } finally {
     rulepackLoading.value = false
   }
+}
+
+function openSecurityAudit() {
+  router.push('/security/audit')
 }
 
 function rulepackTrustLabel(value: string | null | undefined): string {
@@ -1418,6 +1425,7 @@ function reportFingerprint() {
 }
 
 function handlePhase1SecretTap() {
+  if (!demoOpsEnabled) return
   phase1UnlockCounter.value += 1
   if (phase1UnlockTimer) clearTimeout(phase1UnlockTimer)
   phase1UnlockTimer = setTimeout(() => {
@@ -1431,6 +1439,7 @@ function handlePhase1SecretTap() {
 }
 
 function handlePhase2SecretTap() {
+  if (!demoOpsEnabled) return
   phase2UnlockCounter.value += 1
   if (phase2UnlockTimer) clearTimeout(phase2UnlockTimer)
   phase2UnlockTimer = setTimeout(() => {
@@ -1570,7 +1579,7 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
         <span class="sec-hud-pipeline__sep">·</span>
         <span class="sec-hud-pipeline__step">归档管理</span>
       </div>
-      <div v-if="phase1Unlocked || phase2Unlocked" class="demo-secret-actions" />
+      <div v-if="demoOpsEnabled && (phase1Unlocked || phase2Unlocked)" class="demo-secret-actions" />
     </header>
 
     <main class="sec-main">
@@ -1633,13 +1642,14 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
           <div>
             <div class="chart-title">受信规则源运营</div>
             <div class="source-ops-card__subtitle">
-              聚焦规则源健康度、演示数据隔离和同步留痕，让规则包变更能被看见、被追溯。
+              聚焦规则源健康度、生产与测试隔离和同步留痕，让规则包变更能被看见、被追溯。
             </div>
           </div>
           <div class="source-ops-card__glossary">
             规则源：一组可持续更新的检测规则集合；检测场景：这组规则主要识别哪类数据（网络流量 / Web请求 / 文件 / 日志）。
           </div>
           <div class="source-ops-card__actions">
+            <el-button type="success" @click="openSecurityAudit">IDS审计追踪</el-button>
             <el-button @click="openPackagePreviewDialog()">预览规则包</el-button>
             <el-button type="primary" @click="openSourceCreateDialog">新增规则源</el-button>
           </div>
@@ -1892,8 +1902,8 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
         <el-button type="success" :disabled="!selectedIds.length" @click="handleBatchArchive">
           批量归档 ({{ selectedIds.length }})
         </el-button>
-        <el-button type="warning" :loading="simulatingAttack" @click="handleSimulateAttack">
-          演示注入（不计入真实指标）
+        <el-button v-if="demoOpsEnabled" type="warning" :loading="simulatingAttack" @click="handleSimulateAttack">
+          测试注入（仅测试环境）
         </el-button>
         <el-button type="info" @click="openEvidenceTimeline">证据链时间轴</el-button>
       </div>
@@ -2048,7 +2058,7 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
           class="sec-pagination"
           @current-change="(p: number) => { pageOffset = (p - 1) * pageSize; fetchData() }"
         />
-        <div class="demo-clear-area">
+        <div v-if="demoOpsEnabled" class="demo-clear-area">
           <el-button
             class="demo-clear-logo"
             :class="{ armed: clearArmed }"
@@ -2083,13 +2093,14 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
             <el-option label="演示 / 测试" value="demo_test" />
           </el-select>
         </el-form-item>
-        <el-form-item label="检测家族">
+        <el-form-item label="检测场景">
           <el-select v-model="packagePreviewForm.detector_family" class="sec-select">
-            <el-option label="网络" value="network" />
-            <el-option label="网页" value="web" />
-            <el-option label="文件" value="file" />
-            <el-option label="日志" value="log" />
+            <el-option label="网络流量（IP/端口层）" value="network" />
+            <el-option label="Web请求（URL/参数）" value="web" />
+            <el-option label="文件内容（上传/落地）" value="file" />
+            <el-option label="日志事件（系统/应用日志）" value="log" />
           </el-select>
+          <div class="form-field-hint">用于标记这份规则包主要检测哪类数据。</div>
         </el-form-item>
         <el-form-item label="触发人">
           <el-input v-model="packagePreviewForm.triggered_by" placeholder="system_admin" />
@@ -2153,13 +2164,14 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
             <el-option label="演示 / 测试" value="demo_test" />
           </el-select>
         </el-form-item>
-        <el-form-item label="检测家族">
+        <el-form-item label="检测场景">
           <el-select v-model="sourceForm.detector_family" class="sec-select">
-            <el-option label="网络" value="network" />
-            <el-option label="网页" value="web" />
-            <el-option label="文件" value="file" />
-            <el-option label="日志" value="log" />
+            <el-option label="网络流量（IP/端口层）" value="network" />
+            <el-option label="Web请求（URL/参数）" value="web" />
+            <el-option label="文件内容（上传/落地）" value="file" />
+            <el-option label="日志事件（系统/应用日志）" value="log" />
           </el-select>
+          <div class="form-field-hint">告诉系统：这个规则源主要覆盖哪种检测场景。</div>
         </el-form-item>
         <el-form-item label="运行状态">
           <el-select v-model="sourceForm.operational_status" class="sec-select">
@@ -3420,6 +3432,13 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
 
 .source-form-grid :deep(.el-input-number) {
   width: 100%;
+}
+
+.form-field-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(191, 219, 254, 0.82);
 }
 
 @media (max-width: 1280px) {

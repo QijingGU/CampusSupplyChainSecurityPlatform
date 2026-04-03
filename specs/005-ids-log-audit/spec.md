@@ -38,14 +38,15 @@ rejected/failed paths.
 
 ### US3 - Chinese-First Audit UI (P2)
 
-As an operator, I can use Chinese labels in the audit page to search IDS logs,
-view sensitive operations, and review audit summaries without switching context.
+As an operator, I can use Chinese labels in both business audit and IDS audit
+views, so I can separate daily supervision from security traceability without
+confusing contexts.
 
 **Independent Validation**:
 
-- audit page supports new filters and pagination,
-- IDS tab and sensitive tab show expected records,
-- summary cards update with query scope.
+- `/audit` focuses on business/sensitive logs and excludes IDS rows by default,
+- `/security/audit` supports IDS module/result filtering and pagination,
+- both pages keep Chinese-first labels and clear summary cards.
 
 ## Functional Requirements
 
@@ -60,8 +61,15 @@ view sensitive operations, and review audit summaries without switching context.
 5. IDS APIs must write audit logs for:
    source sync, source package preview (success/rejected), source package
    activation (success/rejected), rulepack activation (success/rejected/failed).
-6. Frontend audit page must provide Chinese-first UI for:
-   tab filtering, multi-field filters, IDS outcome visibility, and pagination.
+6. Frontend audit views must provide Chinese-first UI:
+   `/audit` for business/sensitive supervision and `/security/audit` for IDS
+   traceability, each with multi-field filters and pagination.
+7. IDS audit must be presented inside Security Center as a dedicated operational
+   view, separated from business daily-audit pages.
+8. Generic `/audit` page must support non-IDS review focus by excluding IDS
+   records in its default workflow.
+9. Demo-only IDS operation controls must be disabled by default and only be
+   enabled when an explicit environment flag is turned on.
 
 ## Non-Goals
 

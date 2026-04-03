@@ -37,6 +37,7 @@ def list_audit_logs(
     start_at: datetime | None = Query(None),
     end_at: datetime | None = Query(None),
     ids_only: int = Query(0, ge=0, le=1),
+    exclude_ids: int = Query(0, ge=0, le=1),
     ids_domain: str | None = Query(None),
     ids_outcome: str | None = Query(None),
     sensitive_only: int = Query(0, ge=0, le=1),
@@ -64,6 +65,7 @@ def list_audit_logs(
         start_at=start_at,
         end_at=end_at,
         ids_only=bool(ids_only),
+        exclude_ids=bool(exclude_ids),
         ids_domain=ids_domain_value or None,
         ids_outcome=ids_outcome_value or None,
         sensitive_only=bool(sensitive_only),
@@ -104,6 +106,7 @@ def _apply_audit_filters(
     start_at: datetime | None,
     end_at: datetime | None,
     ids_only: bool,
+    exclude_ids: bool,
     ids_domain: str | None,
     ids_outcome: str | None,
     sensitive_only: bool,
@@ -134,6 +137,8 @@ def _apply_audit_filters(
         q = q.filter(AuditLog.created_at <= end_at)
     if ids_only:
         q = q.filter(AuditLog.action.like(f"{IDS_ACTION_PREFIX}%"))
+    if exclude_ids:
+        q = q.filter(not_(AuditLog.action.like(f"{IDS_ACTION_PREFIX}%")))
     if ids_domain:
         q = q.filter(_ids_domain_clause(ids_domain))
     if ids_outcome:

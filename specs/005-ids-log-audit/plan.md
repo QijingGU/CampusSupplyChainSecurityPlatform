@@ -28,6 +28,9 @@
 - Frontend:
   - `frontend/src/api/audit.ts`
   - `frontend/src/views/audit/AuditLogs.vue`
+  - `frontend/src/views/security/SecurityIDSAudit.vue`
+  - `frontend/src/views/security/SecurityCenterLayout.vue`
+  - `frontend/src/router/routes.ts`
 - Documentation:
   - `docs/ids-changelog.md`
   - `specs/005-ids-log-audit/*`

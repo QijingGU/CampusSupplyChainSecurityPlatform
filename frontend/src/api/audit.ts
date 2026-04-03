@@ -56,6 +56,7 @@ export interface AuditListParams {
   start_at?: string
   end_at?: string
   ids_only?: 0 | 1
+  exclude_ids?: 0 | 1
   ids_domain?: 'source_sync' | 'source_package' | 'rulepack'
   ids_outcome?: 'success' | 'rejected' | 'failed' | 'skipped'
   sensitive_only?: 0 | 1

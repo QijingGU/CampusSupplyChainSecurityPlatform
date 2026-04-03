@@ -23,7 +23,7 @@
 ## Phase 4: Frontend Audit Panel
 
 - [X] T008 Update audit API typings and params in `frontend/src/api/audit.ts`
-- [X] T009 Rebuild Chinese-first audit page with filters/tabs/summary/pagination in `frontend/src/views/audit/AuditLogs.vue`
+- [X] T009 Rebuild Chinese-first audit pages with filters/summary/pagination in `frontend/src/views/audit/AuditLogs.vue`
 
 ## Phase 5: Validation & Delivery
 
@@ -33,3 +33,9 @@
 - [X] T013 Extend IDS audit dimensions (`ids_domain`, `ids_outcome`) in `backend/app/api/audit.py`
 - [X] T014 Upgrade audit UI filters and IDS result visibility in `frontend/src/views/audit/AuditLogs.vue`
 - [X] T015 Improve IDS terminology guidance in `frontend/src/views/security/SecurityIDS.vue` for rule source and detector family explanations
+- [X] T016 Move IDS audit view into security center with dedicated page `frontend/src/views/security/SecurityIDSAudit.vue`
+- [X] T017 Update security navigation and routing for `/security/audit` in `frontend/src/views/security/SecurityCenterLayout.vue` and `frontend/src/router/routes.ts`
+- [X] T018 Split generic audit page from IDS audit (exclude IDS rows) via `exclude_ids` in `backend/app/api/audit.py` and `frontend/src/views/audit/AuditLogs.vue`
+- [X] T019 Harden IDS page toward production workflow by default-disabling demo actions and polishing “检测场景” terminology in `frontend/src/views/security/SecurityIDS.vue`
+- [X] T020 Align spec/task wording with the split audit architecture (`/audit` + `/security/audit`) in `specs/005-ids-log-audit/spec.md` and `specs/005-ids-log-audit/tasks.md`
+- [X] T021 Re-run backend/frontend validation and append daily IDS changelog entry in `docs/ids-changelog.md`

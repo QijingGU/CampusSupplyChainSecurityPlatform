@@ -11,6 +11,7 @@
 - `start_at?: datetime`
 - `end_at?: datetime`
 - `ids_only?: 0 | 1`
+- `exclude_ids?: 0 | 1`
 - `ids_domain?: "source_sync" | "source_package" | "rulepack"`
 - `ids_outcome?: "success" | "rejected" | "failed" | "skipped"`
 - `sensitive_only?: 0 | 1`

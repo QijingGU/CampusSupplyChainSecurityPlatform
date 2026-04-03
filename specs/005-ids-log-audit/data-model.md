@@ -27,6 +27,7 @@
 - fuzzy filter: `keyword` against user/action/target/detail
 - time range: `start_at`, `end_at`
 - semantic filters: `ids_only`, `sensitive_only`
+- separation filter: `exclude_ids` for business-audit pages
 - IDS audit filters: `ids_domain`, `ids_outcome`
 - pagination: `page`, `page_size`
 
