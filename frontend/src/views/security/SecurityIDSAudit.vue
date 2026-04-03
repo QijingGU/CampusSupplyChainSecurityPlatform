@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { listAuditLogs, type AuditItem, type AuditListParams, type AuditSummary } from '@/api/audit'
 
 type IdsDomain = 'source_sync' | 'source_package' | 'rulepack'
@@ -24,7 +25,7 @@ const targetTypeOptions = ref<string[]>([])
 const idsDomainOptions = ref<IdsDomain[]>(['source_sync', 'source_package', 'rulepack'])
 const idsOutcomeOptions = ref<IdsOutcome[]>(['success', 'rejected', 'failed', 'skipped'])
 
-const summary = ref<AuditSummary>({
+const emptySummary: AuditSummary = {
   total: 0,
   ids_count: 0,
   sensitive_count: 0,
@@ -34,7 +35,8 @@ const summary = ref<AuditSummary>({
   by_target_type: [],
   ids_by_domain: [],
   ids_by_outcome: [],
-})
+}
+const summary = ref<AuditSummary>(emptySummary)
 
 const actionLabels: Record<string, string> = {
   ids_source_sync: '规则源同步',
@@ -60,16 +62,25 @@ const idsOutcomeLabels: Record<IdsOutcome, string> = {
   skipped: '跳过',
 }
 
-function getActionLabel(action: string) {
+function summaryCountFrom(buckets: Array<{ name: string; count: number }> | undefined, name: string): number {
+  return buckets?.find((bucket) => bucket.name === name)?.count || 0
+}
+
+const idsSuccessCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'success'))
+const idsRejectedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'rejected'))
+const idsFailedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'failed'))
+const idsSkippedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'skipped'))
+
+function getActionLabel(action: string): string {
   return actionLabels[action] || action
 }
 
-function getDomainLabel(domain: string | null | undefined) {
+function getDomainLabel(domain: string | null | undefined): string {
   if (!domain) return '-'
   return idsDomainLabels[domain as IdsDomain] || domain
 }
 
-function getOutcomeLabel(outcome: string | null | undefined) {
+function getOutcomeLabel(outcome: string | null | undefined): string {
   if (!outcome) return '-'
   return idsOutcomeLabels[outcome as IdsOutcome] || outcome
 }
@@ -80,15 +91,6 @@ function outcomeType(outcome: string | null | undefined): 'success' | 'warning' 
   if (outcome === 'failed') return 'danger'
   return 'info'
 }
-
-function summaryCountFrom(buckets: Array<{ name: string; count: number }> | undefined, name: string) {
-  return buckets?.find((x) => x.name === name)?.count || 0
-}
-
-const idsSuccessCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'success'))
-const idsRejectedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'rejected'))
-const idsFailedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'failed'))
-const idsSkippedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'skipped'))
 
 function buildParams(): AuditListParams {
   const params: AuditListParams = {
@@ -111,7 +113,7 @@ function buildParams(): AuditListParams {
 
 function normalizePayload(res: any) {
   if (Array.isArray(res)) {
-    const items = (res as AuditItem[]).filter((x) => x.is_ids)
+    const items = (res as AuditItem[]).filter((item) => item.is_ids)
     return {
       total: items.length,
       page: page.value,
@@ -120,7 +122,7 @@ function normalizePayload(res: any) {
       summary: {
         total: items.length,
         ids_count: items.length,
-        sensitive_count: items.filter((x) => x.is_sensitive).length,
+        sensitive_count: items.filter((item) => item.is_sensitive).length,
         today_count: items.length,
         by_action: [],
         by_user: [],
@@ -139,34 +141,51 @@ function normalizePayload(res: any) {
   return res
 }
 
-async function fetchData() {
+let fetchSeq = 0
+
+async function fetchData(showError = false) {
+  const currentSeq = ++fetchSeq
   loading.value = true
   try {
-    const raw: any = await listAuditLogs(buildParams())
+    const raw: any = await Promise.race([
+      listAuditLogs(buildParams()),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 12000)),
+    ])
+    if (currentSeq !== fetchSeq) return
     const payload = normalizePayload(raw?.data ?? raw)
     tableData.value = payload?.items ?? []
     total.value = Number(payload?.total || 0)
-    summary.value = payload?.summary || summary.value
-    actionOptions.value = payload?.filters?.action_options || []
+    summary.value = payload?.summary || emptySummary
+    actionOptions.value = payload?.filters?.action_options || Object.keys(actionLabels)
     targetTypeOptions.value = payload?.filters?.target_type_options || []
     idsDomainOptions.value = payload?.filters?.ids_domain_options || idsDomainOptions.value
     idsOutcomeOptions.value = payload?.filters?.ids_outcome_options || idsOutcomeOptions.value
+  } catch {
+    if (currentSeq !== fetchSeq) return
+    tableData.value = []
+    total.value = 0
+    summary.value = emptySummary
+    if (showError) ElMessage.error('IDS 审计数据加载失败，请重试')
   } finally {
-    loading.value = false
+    if (currentSeq === fetchSeq) loading.value = false
   }
 }
 
 function search() {
   page.value = 1
-  fetchData()
+  void fetchData(true)
+}
+
+function refresh() {
+  void fetchData(true)
 }
 
 function setRangeByDays(days: number) {
   const end = new Date()
   const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000)
-  const format = (d: Date) => {
-    const p = (n: number) => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  const format = (value: Date) => {
+    const pad = (num: number) => String(num).padStart(2, '0')
+    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`
   }
   timeRange.value = [format(start), format(end)]
   search()
@@ -181,73 +200,73 @@ function resetFilters() {
   idsOutcomeFilter.value = ''
   timeRange.value = []
   page.value = 1
-  fetchData()
+  void fetchData(true)
 }
 
 function onPageChange(nextPage: number) {
   page.value = nextPage
-  fetchData()
+  void fetchData()
 }
 
 function onPageSizeChange(nextSize: number) {
   pageSize.value = nextSize
   page.value = 1
-  fetchData()
+  void fetchData()
 }
 
-onMounted(fetchData)
+onMounted(() => {
+  void fetchData(true)
+})
 </script>
 
 <template>
   <div class="security-audit-page">
-    <header class="sec-header">
-      <div class="sec-hud-rail" aria-hidden="true">
-        <span class="sec-hud-rail__dot" />
-        <span class="sec-hud-rail__brand">安全运营审计 · IDS操作留痕 · 可追溯闭环</span>
-      </div>
-      <h1 class="sec-title">IDS 审计追踪</h1>
-      <div class="sec-subtitle">这里专门看 IDS 的操作记录、结果归类和追溯链路，不与日常业务审计混在一起。</div>
+    <header class="audit-header">
+      <div class="header-chip">安全中心 / IDS 审计追踪</div>
+      <h1 class="header-title">IDS 审计追踪</h1>
+      <p class="header-subtitle">专门追踪规则源、规则包和运行规则包的关键操作，不与业务日常审计混在一起。</p>
     </header>
 
-    <main class="sec-main">
-      <div class="summary-grid">
-        <div class="summary-card">
-          <span class="summary-label">IDS日志总量</span>
+    <main class="audit-main">
+      <section class="summary-grid">
+        <article class="summary-card">
+          <span class="summary-label">IDS 日志总量</span>
           <span class="summary-value">{{ summary.ids_count }}</span>
-        </div>
-        <div class="summary-card summary-card--ok">
+        </article>
+        <article class="summary-card summary-card--ok">
           <span class="summary-label">成功</span>
           <span class="summary-value">{{ idsSuccessCount }}</span>
-        </div>
-        <div class="summary-card summary-card--warn">
+        </article>
+        <article class="summary-card summary-card--warn">
           <span class="summary-label">被拒绝</span>
           <span class="summary-value">{{ idsRejectedCount }}</span>
-        </div>
-        <div class="summary-card summary-card--danger">
+        </article>
+        <article class="summary-card summary-card--danger">
           <span class="summary-label">失败</span>
           <span class="summary-value">{{ idsFailedCount }}</span>
-        </div>
-      </div>
-      <div class="summary-mini">
-        <el-tag type="info">跳过 {{ idsSkippedCount }}</el-tag>
-      </div>
+        </article>
+        <article class="summary-card summary-card--neutral">
+          <span class="summary-label">跳过</span>
+          <span class="summary-value">{{ idsSkippedCount }}</span>
+        </article>
+      </section>
 
-      <div class="filter-card">
+      <section class="filter-panel">
         <div class="filter-row">
-          <el-select v-model="actionFilter" placeholder="动作类型" clearable class="sec-select">
+          <el-select v-model="actionFilter" placeholder="动作类型" clearable class="field-sm">
             <el-option v-for="item in actionOptions" :key="item" :label="getActionLabel(item)" :value="item" />
           </el-select>
-          <el-select v-model="idsDomainFilter" placeholder="IDS模块" clearable class="sec-select">
+          <el-select v-model="idsDomainFilter" placeholder="IDS 模块" clearable class="field-sm">
             <el-option v-for="item in idsDomainOptions" :key="item" :label="getDomainLabel(item)" :value="item" />
           </el-select>
-          <el-select v-model="idsOutcomeFilter" placeholder="处理结果" clearable class="sec-select">
+          <el-select v-model="idsOutcomeFilter" placeholder="处理结果" clearable class="field-sm">
             <el-option v-for="item in idsOutcomeOptions" :key="item" :label="getOutcomeLabel(item)" :value="item" />
           </el-select>
-          <el-select v-model="targetTypeFilter" placeholder="对象类型" clearable class="sec-select">
+          <el-select v-model="targetTypeFilter" placeholder="对象类型" clearable class="field-sm">
             <el-option v-for="item in targetTypeOptions" :key="item" :label="item" :value="item" />
           </el-select>
-          <el-input v-model="userFilter" placeholder="操作人" clearable class="sec-input" />
-          <el-input v-model="keywordFilter" placeholder="关键词（详情/对象ID）" clearable class="sec-input sec-input-wide" />
+          <el-input v-model="userFilter" placeholder="操作人" clearable class="field-sm" />
+          <el-input v-model="keywordFilter" placeholder="关键词（详情/对象ID）" clearable class="field-lg" />
           <el-date-picker
             v-model="timeRange"
             type="datetimerange"
@@ -255,44 +274,50 @@ onMounted(fetchData)
             range-separator="至"
             start-placeholder="开始时间"
             end-placeholder="结束时间"
-            class="sec-date"
+            class="field-date"
           />
           <el-button type="primary" @click="search">查询</el-button>
           <el-button @click="resetFilters">重置</el-button>
+          <el-button @click="refresh">刷新</el-button>
         </div>
         <div class="quick-row">
-          <el-button text @click="setRangeByDays(1)">近24小时</el-button>
-          <el-button text @click="setRangeByDays(3)">近3天</el-button>
-          <el-button text @click="setRangeByDays(7)">近7天</el-button>
+          <el-button text @click="setRangeByDays(1)">近 24 小时</el-button>
+          <el-button text @click="setRangeByDays(3)">近 3 天</el-button>
+          <el-button text @click="setRangeByDays(7)">近 7 天</el-button>
         </div>
-      </div>
+      </section>
 
-      <div class="table-card">
-        <el-table :data="tableData" v-loading="loading" class="sec-table" stripe>
-          <el-table-column prop="created_at" label="时间" width="184">
+      <section class="table-panel">
+        <el-table :data="tableData" v-loading="loading" class="audit-table" stripe>
+          <el-table-column prop="created_at" label="时间" width="188">
             <template #default="{ row }">{{ row.created_at ? row.created_at.slice(0, 19).replace('T', ' ') : '-' }}</template>
           </el-table-column>
-          <el-table-column prop="user_name" label="操作人" width="130" />
-          <el-table-column prop="action" label="动作" width="220">
+          <el-table-column prop="user_name" label="操作人" width="132" />
+          <el-table-column prop="action" label="动作" width="230">
             <template #default="{ row }">
               <el-tag size="small" type="success">{{ getActionLabel(row.action) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="IDS模块" width="130">
+          <el-table-column label="IDS 模块" width="132">
             <template #default="{ row }">{{ getDomainLabel(row.ids_domain) }}</template>
           </el-table-column>
-          <el-table-column label="处理结果" width="110">
+          <el-table-column label="处理结果" width="112">
             <template #default="{ row }">
               <el-tag size="small" :type="outcomeType(row.ids_outcome)">{{ getOutcomeLabel(row.ids_outcome) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="target_type" label="对象类型" width="120" />
-          <el-table-column prop="target_id" label="对象ID" width="180" show-overflow-tooltip />
-          <el-table-column prop="detail" label="详情" min-width="320" show-overflow-tooltip />
+          <el-table-column prop="target_type" label="对象类型" width="122" />
+          <el-table-column prop="target_id" label="对象 ID" width="180" show-overflow-tooltip />
+          <el-table-column prop="detail" label="详情" min-width="340" show-overflow-tooltip />
         </el-table>
+
+        <div v-if="!loading && tableData.length === 0" class="empty-state">
+          当前筛选条件下没有 IDS 审计记录
+        </div>
+
         <el-pagination
           background
-          class="sec-pagination"
+          class="pager"
           layout="total, sizes, prev, pager, next, jumper"
           :total="total"
           :current-page="page"
@@ -301,57 +326,68 @@ onMounted(fetchData)
           @update:current-page="onPageChange"
           @update:page-size="onPageSizeChange"
         />
-      </div>
+      </section>
     </main>
   </div>
 </template>
 
 <style scoped>
 .security-audit-page {
-  padding: 18px 22px 20px;
+  --bg-0: #060b1b;
+  --bg-1: #0b1530;
+  --panel: rgba(9, 20, 42, 0.9);
+  --panel-border: rgba(94, 168, 255, 0.26);
+  --text-main: #f3f7ff;
+  --text-sub: #c8d8f0;
+  --text-muted: #97abcd;
+  --accent: #4da3ff;
+  --ok: #34d399;
+  --warn: #f59e0b;
+  --danger: #ef4444;
+  --font-cn: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+
   min-height: 100%;
+  padding: 22px;
   background:
-    radial-gradient(circle at 10% 10%, rgba(56, 189, 248, 0.14), transparent 35%),
-    radial-gradient(circle at 90% 0%, rgba(37, 99, 235, 0.12), transparent 35%),
-    #05070f;
-  color: #dbeafe;
+    radial-gradient(circle at 8% 8%, rgba(77, 163, 255, 0.22), transparent 36%),
+    radial-gradient(circle at 96% 0%, rgba(56, 189, 248, 0.14), transparent 34%),
+    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+  color: var(--text-main);
+  font-family: var(--font-cn);
 }
 
-.sec-header {
+.audit-header {
   margin-bottom: 16px;
 }
 
-.sec-hud-rail {
-  display: flex;
+.header-chip {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  color: rgba(125, 211, 252, 0.9);
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(77, 163, 255, 0.45);
+  background: rgba(77, 163, 255, 0.12);
+  color: #bfdbfe;
   font-size: 12px;
-  letter-spacing: 0.08em;
-  margin-bottom: 8px;
+  letter-spacing: 0.03em;
 }
 
-.sec-hud-rail__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #22d3ee;
-}
-
-.sec-title {
-  margin: 0;
+.header-title {
+  margin: 10px 0 4px;
   font-size: 34px;
+  line-height: 1.12;
   font-weight: 800;
-  color: #e0f2fe;
+  color: var(--text-main);
 }
 
-.sec-subtitle {
-  margin-top: 6px;
-  color: rgba(191, 219, 254, 0.85);
-  font-size: 13px;
+.header-subtitle {
+  margin: 0;
+  color: var(--text-sub);
+  font-size: 14px;
+  line-height: 1.6;
 }
 
-.sec-main {
+.audit-main {
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -359,107 +395,147 @@ onMounted(fetchData)
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
-.summary-mini {
-  margin-top: -4px;
-}
-
 .summary-card {
-  padding: 14px 14px;
+  border: 1px solid var(--panel-border);
   border-radius: 12px;
-  border: 1px solid rgba(56, 189, 248, 0.24);
-  background: rgba(12, 22, 42, 0.72);
+  background: var(--panel);
+  padding: 14px;
 }
 
 .summary-card--ok {
-  border-color: rgba(16, 185, 129, 0.35);
+  border-color: rgba(52, 211, 153, 0.48);
 }
 
 .summary-card--warn {
-  border-color: rgba(245, 158, 11, 0.35);
+  border-color: rgba(245, 158, 11, 0.48);
 }
 
 .summary-card--danger {
-  border-color: rgba(239, 68, 68, 0.35);
+  border-color: rgba(239, 68, 68, 0.48);
+}
+
+.summary-card--neutral {
+  border-color: rgba(148, 163, 184, 0.44);
 }
 
 .summary-label {
-  color: rgba(191, 219, 254, 0.84);
+  display: block;
+  color: var(--text-sub);
   font-size: 12px;
 }
 
 .summary-value {
   display: block;
   margin-top: 8px;
-  font-size: 26px;
+  font-size: 28px;
   line-height: 1;
   font-weight: 800;
-  color: #f8fafc;
+  color: #ffffff;
 }
 
-.filter-card,
-.table-card {
+.filter-panel,
+.table-panel {
+  border: 1px solid var(--panel-border);
   border-radius: 12px;
-  border: 1px solid rgba(56, 189, 248, 0.2);
-  background: rgba(8, 16, 32, 0.82);
+  background: var(--panel);
   padding: 12px;
 }
 
 .filter-row {
   display: flex;
-  flex-wrap: wrap;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .quick-row {
+  margin-top: 6px;
   display: flex;
   gap: 8px;
-  margin-top: 6px;
 }
 
-.sec-select,
-.sec-input {
-  width: 150px;
+.field-sm {
+  width: 154px;
 }
 
-.sec-input-wide {
+.field-lg {
   width: 240px;
 }
 
-.sec-date {
+.field-date {
   width: 350px;
 }
 
-.sec-table :deep(.el-table),
-.sec-table :deep(.el-table__inner-wrapper),
-.sec-table :deep(.el-table__header-wrapper),
-.sec-table :deep(.el-table__body-wrapper) {
+.audit-table :deep(.el-table),
+.audit-table :deep(.el-table__inner-wrapper),
+.audit-table :deep(.el-table__header-wrapper),
+.audit-table :deep(.el-table__body-wrapper) {
   background: transparent;
 }
 
-.sec-table :deep(th.el-table__cell) {
-  background: rgba(15, 23, 42, 0.78);
-  color: #c7d2fe;
+.audit-table :deep(th.el-table__cell) {
+  background: rgba(17, 31, 62, 0.92);
+  color: #dbeafe;
+  font-weight: 600;
 }
 
-.sec-table :deep(td.el-table__cell) {
-  background: rgba(2, 8, 23, 0.52);
-  color: #e2e8f0;
+.audit-table :deep(td.el-table__cell) {
+  background: rgba(8, 16, 34, 0.76);
+  color: #eef4ff;
 }
 
-.sec-pagination {
+.empty-state {
+  margin-top: 10px;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 13px;
+}
+
+.pager {
   margin-top: 12px;
   justify-content: flex-end;
 }
 
+.security-audit-page :deep(.el-input__wrapper),
+.security-audit-page :deep(.el-select__wrapper),
+.security-audit-page :deep(.el-range-editor.el-input__wrapper) {
+  background: rgba(7, 16, 34, 0.92);
+  box-shadow: 0 0 0 1px rgba(129, 169, 232, 0.24) inset;
+}
+
+.security-audit-page :deep(.el-input__inner),
+.security-audit-page :deep(.el-select__placeholder),
+.security-audit-page :deep(.el-select__selected-item),
+.security-audit-page :deep(.el-range-input) {
+  color: #eef4ff;
+}
+
+.security-audit-page :deep(.el-input__inner::placeholder),
+.security-audit-page :deep(.el-range-input::placeholder) {
+  color: #9fb5d8;
+}
+
+@media (max-width: 1360px) {
+  .summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1024px) {
+  .security-audit-page {
+    padding: 16px;
+  }
+
   .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .sec-date {
+
+  .field-date,
+  .field-sm,
+  .field-lg {
     width: 100%;
   }
 }

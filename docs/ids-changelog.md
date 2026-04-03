@@ -425,3 +425,15 @@ security-center workflows change.
 - Validation for this pass:
   - Python `py_compile` passes for `backend/app/api/audit.py`,
   - frontend `npm run build` passes after route/layout/audit/IDS updates.
+- Fixed IDS audit tracking route-loading regression:
+  - removed route-switch forced loading in
+    `frontend/src/views/security/SecurityCenterLayout.vue`, so entering
+    `/security/audit` no longer gets stuck in infinite loading before refresh.
+- Rebuilt `frontend/src/views/security/SecurityIDSAudit.vue` for production UI quality:
+  - upgraded visual contrast and spacing to align with Security Center style,
+  - replaced old mechanical/unclear text with clear Chinese labels,
+  - improved filter readability and table hierarchy for daily use,
+  - added request timeout + error fallback to avoid endless in-table loading
+    state when API calls stall.
+- Validation for UI/stability fix:
+  - frontend `npm run build` passes after IDS audit page/style refactor.

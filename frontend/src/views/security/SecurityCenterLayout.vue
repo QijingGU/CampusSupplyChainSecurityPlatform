@@ -20,8 +20,7 @@ function goBack() {
 
 function goTo(path: string) {
   if (route.path === path) return
-  loading.value = true
-  router.push(path)
+  void router.push(path)
 }
 
 const isActive = (path: string) => route.path === path || route.path.startsWith(path + '/')
@@ -29,9 +28,10 @@ const isActive = (path: string) => route.path === path || route.path.startsWith(
 let loadTimer: ReturnType<typeof setTimeout> | null = null
 onMounted(() => {
   document.body.classList.add('security-center-active')
+  if (loadTimer) clearTimeout(loadTimer)
   loadTimer = setTimeout(() => {
     loading.value = false
-  }, 280)
+  }, 220)
 })
 onBeforeUnmount(() => {
   document.body.classList.remove('security-center-active')

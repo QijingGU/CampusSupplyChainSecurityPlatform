@@ -39,3 +39,5 @@
 - [X] T019 Harden IDS page toward production workflow by default-disabling demo actions and polishing “检测场景” terminology in `frontend/src/views/security/SecurityIDS.vue`
 - [X] T020 Align spec/task wording with the split audit architecture (`/audit` + `/security/audit`) in `specs/005-ids-log-audit/spec.md` and `specs/005-ids-log-audit/tasks.md`
 - [X] T021 Re-run backend/frontend validation and append daily IDS changelog entry in `docs/ids-changelog.md`
+- [X] T022 Fix security-center route loading regression for `/security/audit` in `frontend/src/views/security/SecurityCenterLayout.vue`
+- [X] T023 Refactor `frontend/src/views/security/SecurityIDSAudit.vue` for readable Chinese copy, stronger contrast, and resilient loading/error handling
