@@ -349,3 +349,32 @@ security-center workflows change.
       `scanner` in `mature-web-balanced`.
 - Remaining gap for this slice:
   - final delivery commit/push step (`T020`) is pending.
+- Reprioritized to IDS auditability and completed new slice scaffolding:
+  - created `specs/005-ids-log-audit/` with `spec.md`, `plan.md`, `research.md`,
+    `data-model.md`, `contracts/ids-log-audit.md`, `quickstart.md`, `tasks.md`,
+    and requirements checklist,
+  - set `005` execution focus to log retrieval quality and IDS operation trace
+    completeness.
+- Completed backend log-audit enhancement:
+  - rewrote `backend/app/api/audit.py` to support pagination, keyword/user/time
+    filtering, IDS-only and sensitive-only filtering, summary metrics, and
+    dynamic filter options,
+  - preserved the existing `audit_logs` schema and derived `is_ids` /
+    `is_sensitive` in response serialization for low-risk rollout.
+- Completed IDS audit write coverage in `backend/app/api/ids.py`:
+  - source sync now records `ids_source_sync`,
+  - source package preview records success and rejected paths,
+  - source package activation records success and rejected paths,
+  - rulepack activation records success, rejected, and failed paths.
+- Completed audit frontend rebuild:
+  - `frontend/src/api/audit.ts` now matches the enhanced `/api/audit` contract,
+  - `frontend/src/views/audit/AuditLogs.vue` is now Chinese-first with summary
+    cards, IDS/sensitive tabs, combined filters, and pagination.
+- Validation for `005` current pass:
+  - Python `py_compile` passes for
+    `backend/app/api/audit.py`, `backend/app/api/ids.py`,
+    `backend/app/services/audit.py`,
+  - frontend `npm run build` passes after audit page and API typing updates.
+- Next step:
+  - run manual endpoint/UI checks for `005`, then commit and push branch updates
+    for PR review.

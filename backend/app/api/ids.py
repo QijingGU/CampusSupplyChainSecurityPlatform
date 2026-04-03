@@ -17,6 +17,7 @@ from ..models.ids_rulepack import IDSRulepackActivation, IDSRulepackRuntimeState
 from ..models.ids_source import IDSSource, IDSSourceSyncAttempt
 from ..models.ids_source_package import IDSSourcePackageActivation, IDSSourcePackageIntake
 from ..services.ids_ai_analysis import is_llm_available, run_ai_analysis_sync
+from ..services.audit import write_audit_log
 from ..services.ids_engine import block_ip_windows, unblock_ip_windows
 from ..services.ids_ingestion import (
     DEMO_EVENT_ORIGIN,
@@ -421,6 +422,18 @@ def trigger_ids_source_sync(
         package_intakes=intake_map.get(int(source.id), []),
         package_activation=activation_map.get(int(source.id)),
     )
+    _write_ids_audit_log(
+        db,
+        current_user=current_user,
+        action="ids_source_sync",
+        target_type="ids_source",
+        target_id=source.source_key or str(source.id),
+        detail=(
+            f"triggered_by={triggered_by}; result={attempt.result_status}; "
+            f"health={serialized['health_state']}; detail={attempt.detail or ''}"
+        )[:512],
+    )
+    db.commit()
     return {
         "source_id": source.id,
         "sync_attempt_id": attempt.id,
@@ -472,6 +485,18 @@ def preview_ids_source_package(
         )
         db.add(intake)
         db.commit()
+        _write_ids_audit_log(
+            db,
+            current_user=current_user,
+            action="ids_source_package_preview_rejected",
+            target_type="ids_source_package",
+            target_id=f"{source_key}:{package_version}",
+            detail=(
+                f"triggered_by={triggered_by}; trust={trust_classification}; "
+                f"reason=source_key_not_found"
+            )[:512],
+        )
+        db.commit()
         raise HTTPException(status_code=400, detail=f"source_key not found: {source_key}")
 
     latest_activation_map = list_latest_package_activations(db, [int(source.id)])
@@ -497,6 +522,18 @@ def preview_ids_source_package(
     db.add(intake)
     db.commit()
     db.refresh(intake)
+    _write_ids_audit_log(
+        db,
+        current_user=current_user,
+        action="ids_source_package_preview",
+        target_type="ids_source_package",
+        target_id=f"{source_key}:{package_version}",
+        detail=(
+            f"triggered_by={triggered_by}; trust={trust_classification}; "
+            f"change={preview['version_change_state']}; fields={','.join(preview['changed_fields']) or '-'}"
+        )[:512],
+    )
+    db.commit()
     return {
         "package_intake_id": intake.id,
         "source_id": preview["source_id"],
@@ -522,6 +559,15 @@ def activate_ids_source_package(
 
     intake = db.query(IDSSourcePackageIntake).filter(IDSSourcePackageIntake.id == req.package_intake_id).first()
     if not intake:
+        _write_ids_audit_log(
+            db,
+            current_user=current_user,
+            action="ids_source_package_activate_rejected",
+            target_type="ids_source_package",
+            target_id=str(req.package_intake_id),
+            detail=f"triggered_by={triggered_by}; reason=package_intake_not_found"[:512],
+        )
+        db.commit()
         raise HTTPException(status_code=404, detail="Package intake not found")
     if intake.source_id is None:
         detail = _build_activation_failure_detail(
@@ -529,6 +575,15 @@ def activate_ids_source_package(
             activation_note=activation_note,
         )
         _record_failed_package_activation(intake, detail=detail, triggered_by=triggered_by, db=db)
+        _write_ids_audit_log(
+            db,
+            current_user=current_user,
+            action="ids_source_package_activate_rejected",
+            target_type="ids_source_package",
+            target_id=f"{intake.source_key or '-'}:{intake.package_version or '-'}",
+            detail=(f"triggered_by={triggered_by}; reason={detail}")[:512],
+        )
+        db.commit()
         raise HTTPException(status_code=400, detail="Rejected package previews cannot be activated")
     if (intake.trust_classification or "").strip() == SOURCE_DEMO_TEST:
         detail = _build_activation_failure_detail(
@@ -536,6 +591,15 @@ def activate_ids_source_package(
             activation_note=activation_note,
         )
         _record_failed_package_activation(intake, detail=detail, triggered_by=triggered_by, db=db)
+        _write_ids_audit_log(
+            db,
+            current_user=current_user,
+            action="ids_source_package_activate_rejected",
+            target_type="ids_source_package",
+            target_id=f"{intake.source_key or '-'}:{intake.package_version or '-'}",
+            detail=(f"triggered_by={triggered_by}; reason={detail}")[:512],
+        )
+        db.commit()
         raise HTTPException(status_code=400, detail="demo_test packages cannot be activated as trusted coverage")
 
     source = _get_source_or_404(db, int(intake.source_id))
@@ -558,6 +622,15 @@ def activate_ids_source_package(
     db.add(activation)
     db.commit()
     db.refresh(activation)
+    _write_ids_audit_log(
+        db,
+        current_user=current_user,
+        action="ids_source_package_activate",
+        target_type="ids_source_package",
+        target_id=f"{source.source_key or source.id}:{activation.package_version or '-'}",
+        detail=(f"triggered_by={triggered_by}; result={PACKAGE_RESULT_ACTIVATED}; note={detail}")[:512],
+    )
+    db.commit()
 
     return {
         "source_id": source.id,
@@ -686,6 +759,15 @@ def activate_ids_rulepack(
             triggered_by=triggered_by,
             activation_detail=detail,
         )
+        _write_ids_audit_log(
+            db,
+            current_user=current_user,
+            action="ids_rulepack_activate_failed",
+            target_type="ids_rulepack",
+            target_id=rulepack_key,
+            detail=(f"triggered_by={triggered_by}; activation_id={activation.id}; reason={detail}")[:512],
+        )
+        db.commit()
         raise HTTPException(
             status_code=400,
             detail={
@@ -703,6 +785,15 @@ def activate_ids_rulepack(
             triggered_by=triggered_by,
             activation_detail=f"{detail}. {activation_note}".strip(),
         )
+        _write_ids_audit_log(
+            db,
+            current_user=current_user,
+            action="ids_rulepack_activate_rejected",
+            target_type="ids_rulepack",
+            target_id=rulepack_key,
+            detail=(f"triggered_by={triggered_by}; activation_id={activation.id}; reason={detail}")[:512],
+        )
+        db.commit()
         raise HTTPException(
             status_code=400,
             detail={
@@ -731,6 +822,15 @@ def activate_ids_rulepack(
         activation_detail=detail,
     )
     set_runtime_active_rulepack_key(rulepack_key)
+    _write_ids_audit_log(
+        db,
+        current_user=current_user,
+        action="ids_rulepack_activate",
+        target_type="ids_rulepack",
+        target_id=rulepack_key,
+        detail=(f"triggered_by={triggered_by}; activation_id={activation.id}; note={detail}")[:512],
+    )
+    db.commit()
     return {
         "result_status": RULEPACK_RESULT_ACTIVATED,
         "active_rulepack_key": rulepack_key,
@@ -1686,6 +1786,34 @@ def _build_source_package_history_item(
         "recent_intakes": [_serialize_source_package_intake(intake) for intake in intakes],
         "recent_activations": [_serialize_source_package_activation(activation) for activation in activations],
     }
+
+
+def _write_ids_audit_log(
+    db: Session,
+    *,
+    current_user,
+    action: str,
+    target_type: str,
+    target_id: str,
+    detail: str,
+):
+    user_id = getattr(current_user, "id", None)
+    user_name = (
+        getattr(current_user, "real_name", None)
+        or getattr(current_user, "username", None)
+        or "system_admin"
+    )
+    user_role = getattr(current_user, "role", None) or "system_admin"
+    write_audit_log(
+        db,
+        user_id=user_id,
+        user_name=str(user_name)[:64],
+        user_role=str(user_role)[:64],
+        action=(action or "")[:64],
+        target_type=(target_type or "")[:64],
+        target_id=(target_id or "")[:64],
+        detail=(detail or "")[:512],
+    )
 
 
 def _record_failed_package_activation(
