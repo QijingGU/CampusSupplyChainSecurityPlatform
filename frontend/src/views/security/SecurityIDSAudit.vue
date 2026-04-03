@@ -353,7 +353,11 @@ onMounted(() => {
 
 <style scoped>
 .ids-audit-page {
+  height: 100%;
   min-height: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 14px 16px 16px;
   color: #edf6ff;
   font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
@@ -361,6 +365,19 @@ onMounted(() => {
     radial-gradient(circle at 6% 4%, rgba(27, 78, 143, 0.2), transparent 34%),
     radial-gradient(circle at 98% 0, rgba(26, 96, 167, 0.14), transparent 36%),
     #030915;
+}
+
+.ids-audit-page::-webkit-scrollbar {
+  width: 10px;
+}
+
+.ids-audit-page::-webkit-scrollbar-track {
+  background: rgba(7, 19, 39, 0.92);
+}
+
+.ids-audit-page::-webkit-scrollbar-thumb {
+  border-radius: 8px;
+  background: rgba(101, 153, 220, 0.42);
 }
 
 .audit-hero {
