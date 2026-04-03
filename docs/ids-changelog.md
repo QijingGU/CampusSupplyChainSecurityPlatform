@@ -378,3 +378,7 @@ security-center workflows change.
 - Next step:
   - run manual endpoint/UI checks for `005`, then commit and push branch updates
     for PR review.
+- Delivery:
+  - committed IDS log-audit slice as
+    `feat: add ids log audit workflow and chinese audit panel`,
+  - pushed `security-center/feature-ids` to `origin` at commit `b630b41`.

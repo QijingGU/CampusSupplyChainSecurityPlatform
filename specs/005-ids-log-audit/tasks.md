@@ -29,4 +29,4 @@
 
 - [X] T010 Run backend compile checks for updated audit/ids files
 - [X] T011 Run frontend production build
-- [ ] T012 Update changelog, commit, push `security-center/feature-ids`, and prepare PR note
+- [X] T012 Update changelog, commit, push `security-center/feature-ids`, and prepare PR note
