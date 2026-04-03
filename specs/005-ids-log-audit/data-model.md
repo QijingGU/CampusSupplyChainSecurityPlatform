@@ -18,6 +18,8 @@
 
 - `is_ids: bool` -> `action.startswith("ids_")`
 - `is_sensitive: bool` -> `action in sensitive_action_set`
+- `ids_domain: str | null` -> `source_sync` / `source_package` / `rulepack`
+- `ids_outcome: str | null` -> `success` / `rejected` / `failed` / `skipped`
 
 ## Query Dimensions
 
@@ -25,6 +27,7 @@
 - fuzzy filter: `keyword` against user/action/target/detail
 - time range: `start_at`, `end_at`
 - semantic filters: `ids_only`, `sensitive_only`
+- IDS audit filters: `ids_domain`, `ids_outcome`
 - pagination: `page`, `page_size`
 
 ## Summary Metrics
@@ -34,3 +37,4 @@
 - `sensitive_count`
 - `today_count`
 - top grouped counts by action/user/target_type
+- IDS grouped counts by domain/outcome

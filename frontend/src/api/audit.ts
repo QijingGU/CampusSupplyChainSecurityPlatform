@@ -10,6 +10,8 @@ export interface AuditItem {
   detail: string
   is_ids: boolean
   is_sensitive: boolean
+  ids_domain: 'source_sync' | 'source_package' | 'rulepack' | null
+  ids_outcome: 'success' | 'rejected' | 'failed' | 'skipped' | null
   created_at: string | null
 }
 
@@ -26,11 +28,15 @@ export interface AuditSummary {
   by_action: AuditSummaryBucket[]
   by_user: AuditSummaryBucket[]
   by_target_type: AuditSummaryBucket[]
+  ids_by_domain: AuditSummaryBucket[]
+  ids_by_outcome: AuditSummaryBucket[]
 }
 
 export interface AuditFilterOptions {
   action_options: string[]
   target_type_options: string[]
+  ids_domain_options: Array<'source_sync' | 'source_package' | 'rulepack'>
+  ids_outcome_options: Array<'success' | 'rejected' | 'failed' | 'skipped'>
 }
 
 export interface AuditListResponse {
@@ -50,6 +56,8 @@ export interface AuditListParams {
   start_at?: string
   end_at?: string
   ids_only?: 0 | 1
+  ids_domain?: 'source_sync' | 'source_package' | 'rulepack'
+  ids_outcome?: 'success' | 'rejected' | 'failed' | 'skipped'
   sensitive_only?: 0 | 1
   page?: number
   page_size?: number

@@ -51,7 +51,8 @@ view sensitive operations, and review audit summaries without switching context.
 
 1. `GET /api/audit` must support query filters:
    `action`, `target_type`, `user_name`, `keyword`, `start_at`, `end_at`,
-   `ids_only`, `sensitive_only`, `page`, `page_size`.
+   `ids_only`, `ids_domain`, `ids_outcome`, `sensitive_only`, `page`,
+   `page_size`.
 2. `GET /api/audit` must return paginated shape:
    `total`, `page`, `page_size`, `items`, `summary`, `filters`.
 3. Backend must classify IDS actions using `ids_` prefix and expose `is_ids`.
@@ -60,7 +61,7 @@ view sensitive operations, and review audit summaries without switching context.
    source sync, source package preview (success/rejected), source package
    activation (success/rejected), rulepack activation (success/rejected/failed).
 6. Frontend audit page must provide Chinese-first UI for:
-   tab filtering, multi-field filters, summary cards, and pagination.
+   tab filtering, multi-field filters, IDS outcome visibility, and pagination.
 
 ## Non-Goals
 

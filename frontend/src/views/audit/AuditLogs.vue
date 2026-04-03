@@ -13,6 +13,8 @@ import {
 } from '@/stores/demo'
 
 type ActiveTab = 'all' | 'ids' | 'sensitive' | 'misapproval'
+type IdsDomain = 'source_sync' | 'source_package' | 'rulepack'
+type IdsOutcome = 'success' | 'rejected' | 'failed' | 'skipped'
 
 interface MisapprovalAuditRow {
   _isMisapproval: true
@@ -25,6 +27,8 @@ interface MisapprovalAuditRow {
   detail: string
   is_ids: false
   is_sensitive: true
+  ids_domain: null
+  ids_outcome: null
   created_at: string | null
 }
 
@@ -42,10 +46,15 @@ const actionFilter = ref('')
 const targetFilter = ref('')
 const userFilter = ref('')
 const keywordFilter = ref('')
+const idsDomainFilter = ref<IdsDomain | ''>('')
+const idsOutcomeFilter = ref<IdsOutcome | ''>('')
 const timeRange = ref<[string, string] | []>([])
 
 const actionOptions = ref<string[]>([])
 const targetTypeOptions = ref<string[]>([])
+const idsDomainOptions = ref<IdsDomain[]>(['source_sync', 'source_package', 'rulepack'])
+const idsOutcomeOptions = ref<IdsOutcome[]>(['success', 'rejected', 'failed', 'skipped'])
+
 const summary = ref<AuditSummary>({
   total: 0,
   ids_count: 0,
@@ -54,6 +63,8 @@ const summary = ref<AuditSummary>({
   by_action: [],
   by_user: [],
   by_target_type: [],
+  ids_by_domain: [],
+  ids_by_outcome: [],
 })
 
 const emailDialogVisible = ref(false)
@@ -61,7 +72,7 @@ const emailTarget = ref<MisapprovalRecord | null>(null)
 const emailForm = ref({ to: '', subject: '', body: '' })
 
 const actionLabels: Record<string, string> = {
-  purchase_create: '采购申请',
+  purchase_create: '创建采购申请',
   purchase_approve: '采购审批通过',
   purchase_reject: '采购审批驳回',
   supplier_confirm: '供应商确认',
@@ -72,14 +83,27 @@ const actionLabels: Record<string, string> = {
   delivery_status_update: '配送状态更新',
   warning_handle: '预警处置',
   misapproval_approve: '误批审计',
-  ids_source_sync: 'IDS 源同步',
-  ids_source_package_preview: 'IDS 包预览',
-  ids_source_package_preview_rejected: 'IDS 包预览拒绝',
-  ids_source_package_activate: 'IDS 包激活',
-  ids_source_package_activate_rejected: 'IDS 包激活拒绝',
-  ids_rulepack_activate: 'IDS 规则包激活',
-  ids_rulepack_activate_rejected: 'IDS 规则包激活拒绝',
-  ids_rulepack_activate_failed: 'IDS 规则包激活失败',
+  ids_source_sync: '规则源同步',
+  ids_source_package_preview: '规则包预览',
+  ids_source_package_preview_rejected: '规则包预览被拒绝',
+  ids_source_package_activate: '规则包激活',
+  ids_source_package_activate_rejected: '规则包激活被拒绝',
+  ids_rulepack_activate: '运行规则包激活',
+  ids_rulepack_activate_rejected: '运行规则包激活被拒绝',
+  ids_rulepack_activate_failed: '运行规则包激活失败',
+}
+
+const idsDomainLabels: Record<IdsDomain, string> = {
+  source_sync: '规则源同步',
+  source_package: '规则包管理',
+  rulepack: '运行规则包',
+}
+
+const idsOutcomeLabels: Record<IdsOutcome, string> = {
+  success: '成功',
+  rejected: '被拒绝',
+  failed: '失败',
+  skipped: '跳过',
 }
 
 const showTableData = computed(() => (activeTab.value === 'all' ? mergedTableData.value : tableData.value))
@@ -87,6 +111,23 @@ const showPagination = computed(() => activeTab.value !== 'misapproval')
 
 function getActionLabel(action: string) {
   return actionLabels[action] || action
+}
+
+function getIdsDomainLabel(domain: string | null | undefined) {
+  if (!domain) return '-'
+  return idsDomainLabels[domain as IdsDomain] || domain
+}
+
+function getIdsOutcomeLabel(outcome: string | null | undefined) {
+  if (!outcome) return '-'
+  return idsOutcomeLabels[outcome as IdsOutcome] || outcome
+}
+
+function idsOutcomeTagType(outcome: string | null | undefined): 'success' | 'warning' | 'danger' | 'info' {
+  if (outcome === 'success') return 'success'
+  if (outcome === 'rejected') return 'warning'
+  if (outcome === 'failed') return 'danger'
+  return 'info'
 }
 
 function isMisapprovalRow(row: MixedAuditRow): row is MisapprovalAuditRow {
@@ -106,6 +147,8 @@ function toMixedRow(rec: MisapprovalRecord): MisapprovalAuditRow {
     detail: `误批订单 ${rec.orderNo}，物资 ${rec.goodsSummary}，决策间隔 ${(rec.decisionTimeMs / 1000).toFixed(1)} 秒`,
     is_ids: false,
     is_sensitive: true,
+    ids_domain: null,
+    ids_outcome: null,
   }
 }
 
@@ -131,6 +174,8 @@ function buildParams(): AuditListParams {
     params.start_at = timeRange.value[0]
     params.end_at = timeRange.value[1]
   }
+  if (idsDomainFilter.value) params.ids_domain = idsDomainFilter.value
+  if (idsOutcomeFilter.value) params.ids_outcome = idsOutcomeFilter.value
   if (activeTab.value === 'ids') params.ids_only = 1
   if (activeTab.value === 'sensitive') params.sensitive_only = 1
   return params
@@ -152,20 +197,31 @@ function normalizePayload(res: any) {
         by_action: [],
         by_user: [],
         by_target_type: [],
+        ids_by_domain: [],
+        ids_by_outcome: [],
       } as AuditSummary,
       filters: {
         action_options: Object.keys(actionLabels),
         target_type_options: [],
+        ids_domain_options: ['source_sync', 'source_package', 'rulepack'],
+        ids_outcome_options: ['success', 'rejected', 'failed', 'skipped'],
       },
     }
   }
   return res
 }
 
+function summaryCountFrom(buckets: Array<{ name: string; count: number }> | undefined, name: string) {
+  return buckets?.find((x) => x.name === name)?.count || 0
+}
+
+const idsSuccessCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'success'))
+const idsRejectedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'rejected'))
+const idsFailedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'failed'))
+const idsSkippedCount = computed(() => summaryCountFrom(summary.value.ids_by_outcome, 'skipped'))
+
 async function fetchData() {
-  if (activeTab.value === 'misapproval') {
-    return
-  }
+  if (activeTab.value === 'misapproval') return
   loading.value = true
   try {
     const raw: any = await listAuditLogs(buildParams())
@@ -176,9 +232,9 @@ async function fetchData() {
     summary.value = payload?.summary || summary.value
     actionOptions.value = payload?.filters?.action_options || []
     targetTypeOptions.value = payload?.filters?.target_type_options || []
-    if (activeTab.value === 'all') {
-      mergeAllRows(tableData.value)
-    }
+    idsDomainOptions.value = payload?.filters?.ids_domain_options || idsDomainOptions.value
+    idsOutcomeOptions.value = payload?.filters?.ids_outcome_options || idsOutcomeOptions.value
+    if (activeTab.value === 'all') mergeAllRows(tableData.value)
   } catch {
     tableData.value = []
     mergedTableData.value = []
@@ -193,11 +249,24 @@ function search() {
   fetchData()
 }
 
+function setRangeByDays(days: number) {
+  const end = new Date()
+  const start = new Date(end.getTime() - days * 24 * 60 * 60 * 1000)
+  const format = (d: Date) => {
+    const p = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  }
+  timeRange.value = [format(start), format(end)]
+  search()
+}
+
 function resetFilters() {
   actionFilter.value = ''
   targetFilter.value = ''
   userFilter.value = ''
   keywordFilter.value = ''
+  idsDomainFilter.value = ''
+  idsOutcomeFilter.value = ''
   timeRange.value = []
   page.value = 1
   fetchData()
@@ -259,24 +328,22 @@ onMounted(() => {
       `发现 ${unseen.length} 条新的误批审计记录，请尽快处理。`,
       '审计提醒',
       { type: 'warning', confirmButtonText: '我知道了' }
-    ).then(() => {
-      unseen.forEach(markMisapprovalSeen)
-    })
+    ).then(() => unseen.forEach(markMisapprovalSeen))
   }
 })
 
 watch(activeTab, () => {
   page.value = 1
-  if (activeTab.value === 'all') {
-    mergeAllRows(tableData.value)
+  if (activeTab.value === 'all') mergeAllRows(tableData.value)
+  if (activeTab.value !== 'ids') {
+    idsDomainFilter.value = ''
+    idsOutcomeFilter.value = ''
   }
   fetchData()
 })
 
 watch(misapprovalRecords, () => {
-  if (activeTab.value === 'all') {
-    mergeAllRows(tableData.value)
-  }
+  if (activeTab.value === 'all') mergeAllRows(tableData.value)
 }, { deep: true })
 </script>
 
@@ -284,7 +351,7 @@ watch(misapprovalRecords, () => {
   <div class="audit-page">
     <div class="page-header">
       <h2>日志审计中心</h2>
-      <p>统一查看系统日志、IDS 操作日志和敏感操作，支持快速筛选与追溯。</p>
+      <p>把 IDS 关键操作、敏感动作和误批事件统一留痕，支持按模块和结果快速追溯。</p>
     </div>
 
     <div class="summary-grid">
@@ -304,6 +371,13 @@ watch(misapprovalRecords, () => {
         <div class="summary-label">今日新增</div>
         <div class="summary-value">{{ summary.today_count }}</div>
       </div>
+    </div>
+
+    <div v-if="activeTab === 'ids'" class="ids-outcome-strip">
+      <el-tag type="success">成功 {{ idsSuccessCount }}</el-tag>
+      <el-tag type="warning">被拒绝 {{ idsRejectedCount }}</el-tag>
+      <el-tag type="danger">失败 {{ idsFailedCount }}</el-tag>
+      <el-tag type="info">跳过 {{ idsSkippedCount }}</el-tag>
     </div>
 
     <div class="tabs-row">
@@ -331,10 +405,34 @@ watch(misapprovalRecords, () => {
         range-separator="至"
         start-placeholder="开始时间"
         end-placeholder="结束时间"
-        style="width: 380px"
+        style="width: 360px"
       />
+      <el-select
+        v-if="activeTab === 'ids'"
+        v-model="idsDomainFilter"
+        placeholder="IDS模块"
+        clearable
+        style="width: 160px"
+      >
+        <el-option v-for="item in idsDomainOptions" :key="item" :label="getIdsDomainLabel(item)" :value="item" />
+      </el-select>
+      <el-select
+        v-if="activeTab === 'ids'"
+        v-model="idsOutcomeFilter"
+        placeholder="处理结果"
+        clearable
+        style="width: 140px"
+      >
+        <el-option v-for="item in idsOutcomeOptions" :key="item" :label="getIdsOutcomeLabel(item)" :value="item" />
+      </el-select>
       <el-button type="primary" @click="search">查询</el-button>
       <el-button @click="resetFilters">重置</el-button>
+    </div>
+
+    <div v-if="activeTab !== 'misapproval'" class="quick-row">
+      <el-button text @click="setRangeByDays(1)">近24小时</el-button>
+      <el-button text @click="setRangeByDays(3)">近3天</el-button>
+      <el-button text @click="setRangeByDays(7)">近7天</el-button>
     </div>
 
     <div v-if="activeTab === 'misapproval'" class="misapproval-section">
@@ -368,8 +466,8 @@ watch(misapprovalRecords, () => {
           <template #default="{ row }">{{ row.created_at ? row.created_at.slice(0, 19).replace('T', ' ') : '-' }}</template>
         </el-table-column>
         <el-table-column prop="user_name" label="操作人" width="120" />
-        <el-table-column prop="user_role" label="角色" width="130" />
-        <el-table-column prop="action" label="动作" width="180">
+        <el-table-column prop="user_role" label="角色" width="120" />
+        <el-table-column prop="action" label="动作" width="190">
           <template #default="{ row }">
             <el-tag
               size="small"
@@ -379,9 +477,21 @@ watch(misapprovalRecords, () => {
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column v-if="activeTab === 'ids'" label="IDS模块" width="130">
+          <template #default="{ row }">
+            {{ getIdsDomainLabel(row.ids_domain) }}
+          </template>
+        </el-table-column>
+        <el-table-column v-if="activeTab === 'ids'" label="处理结果" width="110">
+          <template #default="{ row }">
+            <el-tag size="small" :type="idsOutcomeTagType(row.ids_outcome)">
+              {{ getIdsOutcomeLabel(row.ids_outcome) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="target_type" label="对象类型" width="120" />
-        <el-table-column prop="target_id" label="对象ID" width="160" show-overflow-tooltip />
-        <el-table-column prop="detail" label="详情" min-width="280" show-overflow-tooltip />
+        <el-table-column prop="target_id" label="对象ID" width="180" show-overflow-tooltip />
+        <el-table-column prop="detail" label="详情" min-width="300" show-overflow-tooltip />
       </el-table>
 
       <div v-if="showPagination" class="pager">
@@ -422,22 +532,20 @@ watch(misapprovalRecords, () => {
 .audit-page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
-.page-header {
-  h2 {
-    margin: 0 0 6px 0;
-    font-size: 22px;
-    font-weight: 700;
-    color: #12324f;
-  }
+.page-header h2 {
+  margin: 0 0 6px 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: #12324f;
+}
 
-  p {
-    margin: 0;
-    color: #4e6278;
-    font-size: 14px;
-  }
+.page-header p {
+  margin: 0;
+  color: #4e6278;
+  font-size: 14px;
 }
 
 .summary-grid {
@@ -470,15 +578,25 @@ watch(misapprovalRecords, () => {
   color: #d35400;
 }
 
+.ids-outcome-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .tabs-row {
   display: flex;
-  justify-content: flex-start;
 }
 
 .filter-row {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.quick-row {
+  display: flex;
+  gap: 8px;
 }
 
 .table-card {

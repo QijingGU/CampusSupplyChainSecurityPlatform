@@ -382,3 +382,21 @@ security-center workflows change.
   - committed IDS log-audit slice as
     `feat: add ids log audit workflow and chinese audit panel`,
   - pushed `security-center/feature-ids` to `origin` at commit `b630b41`.
+- Continued hardening for log-audit completeness and terminology quality:
+  - extended `GET /api/audit` with IDS-specific dimensions:
+    - query filters `ids_domain` and `ids_outcome`,
+    - summary metrics `ids_by_domain` and `ids_by_outcome`,
+    - per-row derived fields `ids_domain` and `ids_outcome`,
+  - rebuilt the audit page with clearer Chinese-first copy and stronger IDS
+    review flow:
+    - IDS tab now supports module/outcome filtering and quick time ranges,
+    - IDS table now shows module and result columns for faster triage,
+    - IDS result strip (`成功/被拒绝/失败/跳过`) is visible during IDS review,
+  - improved IDS page wording to reduce mechanical terminology confusion:
+    - added in-page glossary text explaining “规则源” and “检测场景” in plain
+      language,
+    - event detail now shows detector family through a human-readable label
+      mapper instead of raw enum strings.
+- Validation for the hardening pass:
+  - Python `py_compile` passes for `backend/app/api/audit.py`,
+  - frontend `npm run build` passes after audit and IDS wording updates.

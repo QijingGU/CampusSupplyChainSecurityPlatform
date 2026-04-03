@@ -30,3 +30,6 @@
 - [X] T010 Run backend compile checks for updated audit/ids files
 - [X] T011 Run frontend production build
 - [X] T012 Update changelog, commit, push `security-center/feature-ids`, and prepare PR note
+- [X] T013 Extend IDS audit dimensions (`ids_domain`, `ids_outcome`) in `backend/app/api/audit.py`
+- [X] T014 Upgrade audit UI filters and IDS result visibility in `frontend/src/views/audit/AuditLogs.vue`
+- [X] T015 Improve IDS terminology guidance in `frontend/src/views/security/SecurityIDS.vue` for rule source and detector family explanations

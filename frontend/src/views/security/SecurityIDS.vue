@@ -480,6 +480,14 @@ function sourceClassificationLabel(value: string | null | undefined): string {
   return value?.trim() || '-'
 }
 
+function detectorFamilyLabel(value: string | null | undefined): string {
+  if (value === 'network') return '网络流量（IP/端口层）'
+  if (value === 'web') return 'Web请求（URL/参数）'
+  if (value === 'file') return '文件内容（上传/落地）'
+  if (value === 'log') return '日志事件（系统/应用日志）'
+  return value?.trim() || '-'
+}
+
 function sourceClassificationTagType(value: string | null | undefined): 'success' | 'warning' | 'info' {
   if (value === 'external_mature') return 'success'
   if (value === 'custom_project') return 'warning'
@@ -1628,6 +1636,9 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
               聚焦规则源健康度、演示数据隔离和同步留痕，让规则包变更能被看见、被追溯。
             </div>
           </div>
+          <div class="source-ops-card__glossary">
+            规则源：一组可持续更新的检测规则集合；检测场景：这组规则主要识别哪类数据（网络流量 / Web请求 / 文件 / 日志）。
+          </div>
           <div class="source-ops-card__actions">
             <el-button @click="openPackagePreviewDialog()">预览规则包</el-button>
             <el-button type="primary" @click="openSourceCreateDialog">新增规则源</el-button>
@@ -2389,8 +2400,8 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
               <span class="detail-value">{{ currentRow.detector_name || '-' }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">检测家族</span>
-              <span class="detail-value">{{ currentRow.detector_family || '-' }}</span>
+              <span class="detail-label">检测场景</span>
+              <span class="detail-value">{{ detectorFamilyLabel(currentRow.detector_family) }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">规则 ID</span>
@@ -3308,6 +3319,17 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
   line-height: 1.5;
   max-width: 520px;
   color: rgba(226, 232, 240, 0.76);
+}
+
+.source-ops-card__glossary {
+  padding: 8px 10px;
+  border: 1px dashed rgba(56, 189, 248, 0.35);
+  border-radius: 8px;
+  background: rgba(12, 22, 41, 0.52);
+  color: rgba(191, 219, 254, 0.95);
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 560px;
 }
 
 .source-summary-grid {

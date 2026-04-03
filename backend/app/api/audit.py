@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, not_, or_
 from sqlalchemy.orm import Query as SAQuery
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,8 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 _allowed = require_roles("system_admin")
 
 IDS_ACTION_PREFIX = "ids_"
+IDS_DOMAIN_OPTIONS = {"source_sync", "source_package", "rulepack"}
+IDS_OUTCOME_OPTIONS = {"success", "rejected", "failed", "skipped"}
 SENSITIVE_ACTIONS = {
     "purchase_reject",
     "supplier_confirm",
@@ -35,6 +37,8 @@ def list_audit_logs(
     start_at: datetime | None = Query(None),
     end_at: datetime | None = Query(None),
     ids_only: int = Query(0, ge=0, le=1),
+    ids_domain: str | None = Query(None),
+    ids_outcome: str | None = Query(None),
     sensitive_only: int = Query(0, ge=0, le=1),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
@@ -43,6 +47,12 @@ def list_audit_logs(
 ):
     if start_at and end_at and start_at > end_at:
         raise HTTPException(status_code=400, detail="start_at must be earlier than end_at")
+    ids_domain_value = (ids_domain or "").strip()
+    ids_outcome_value = (ids_outcome or "").strip()
+    if ids_domain_value and ids_domain_value not in IDS_DOMAIN_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"invalid ids_domain: {ids_domain_value}")
+    if ids_outcome_value and ids_outcome_value not in IDS_OUTCOME_OPTIONS:
+        raise HTTPException(status_code=400, detail=f"invalid ids_outcome: {ids_outcome_value}")
 
     q = db.query(AuditLog)
     q = _apply_audit_filters(
@@ -54,6 +64,8 @@ def list_audit_logs(
         start_at=start_at,
         end_at=end_at,
         ids_only=bool(ids_only),
+        ids_domain=ids_domain_value or None,
+        ids_outcome=ids_outcome_value or None,
         sensitive_only=bool(sensitive_only),
     )
 
@@ -76,6 +88,8 @@ def list_audit_logs(
         "filters": {
             "action_options": action_options,
             "target_type_options": target_type_options,
+            "ids_domain_options": sorted(IDS_DOMAIN_OPTIONS),
+            "ids_outcome_options": sorted(IDS_OUTCOME_OPTIONS),
         },
     }
 
@@ -90,6 +104,8 @@ def _apply_audit_filters(
     start_at: datetime | None,
     end_at: datetime | None,
     ids_only: bool,
+    ids_domain: str | None,
+    ids_outcome: str | None,
     sensitive_only: bool,
 ) -> SAQuery:
     if action:
@@ -118,6 +134,10 @@ def _apply_audit_filters(
         q = q.filter(AuditLog.created_at <= end_at)
     if ids_only:
         q = q.filter(AuditLog.action.like(f"{IDS_ACTION_PREFIX}%"))
+    if ids_domain:
+        q = q.filter(_ids_domain_clause(ids_domain))
+    if ids_outcome:
+        q = q.filter(_ids_outcome_clause(ids_outcome))
     if sensitive_only:
         q = q.filter(AuditLog.action.in_(SENSITIVE_ACTIONS))
     return q
@@ -153,6 +173,14 @@ def _build_summary(q: SAQuery) -> dict:
         .limit(12)
         .all()
     )
+    ids_by_domain = []
+    for name in sorted(IDS_DOMAIN_OPTIONS):
+        ids_by_domain.append({"name": name, "count": q.filter(_ids_domain_clause(name)).count()})
+
+    ids_by_outcome = []
+    for name in sorted(IDS_OUTCOME_OPTIONS):
+        ids_by_outcome.append({"name": name, "count": q.filter(_ids_outcome_clause(name)).count()})
+
     return {
         "total": total,
         "ids_count": ids_count,
@@ -161,6 +189,8 @@ def _build_summary(q: SAQuery) -> dict:
         "by_action": [{"name": (name or "-"), "count": int(cnt or 0)} for name, cnt in by_action_rows],
         "by_user": [{"name": (name or "-"), "count": int(cnt or 0)} for name, cnt in by_user_rows],
         "by_target_type": [{"name": (name or "-"), "count": int(cnt or 0)} for name, cnt in by_target_rows],
+        "ids_by_domain": ids_by_domain,
+        "ids_by_outcome": ids_by_outcome,
     }
 
 
@@ -191,6 +221,8 @@ def _list_filter_options(db: Session) -> tuple[list[str], list[str]]:
 
 def _serialize_audit_log_item(x: AuditLog) -> dict:
     action = x.action or ""
+    ids_domain = _infer_ids_domain(action)
+    ids_outcome = _infer_ids_outcome(action, x.detail or "")
     return {
         "id": x.id,
         "user_name": x.user_name,
@@ -201,5 +233,73 @@ def _serialize_audit_log_item(x: AuditLog) -> dict:
         "detail": x.detail,
         "is_ids": action.startswith(IDS_ACTION_PREFIX),
         "is_sensitive": action in SENSITIVE_ACTIONS,
+        "ids_domain": ids_domain,
+        "ids_outcome": ids_outcome,
         "created_at": x.created_at.isoformat() if x.created_at else None,
     }
+
+
+def _ids_domain_clause(ids_domain: str):
+    if ids_domain == "source_sync":
+        return AuditLog.action == "ids_source_sync"
+    if ids_domain == "source_package":
+        return AuditLog.action.like("ids_source_package_%")
+    if ids_domain == "rulepack":
+        return AuditLog.action.like("ids_rulepack_%")
+    return AuditLog.action.like(f"{IDS_ACTION_PREFIX}%")
+
+
+def _ids_outcome_clause(ids_outcome: str):
+    rejected_clause = AuditLog.action.like("ids_%_rejected")
+    failed_clause = or_(
+        AuditLog.action.like("ids_%_failed"),
+        and_(
+            AuditLog.action == "ids_source_sync",
+            AuditLog.detail.ilike("%result=failed%"),
+        ),
+    )
+    skipped_clause = and_(
+        AuditLog.action == "ids_source_sync",
+        AuditLog.detail.ilike("%result=skipped%"),
+    )
+    success_clause = and_(
+        AuditLog.action.like("ids_%"),
+        not_(rejected_clause),
+        not_(failed_clause),
+        not_(skipped_clause),
+    )
+    if ids_outcome == "success":
+        return success_clause
+    if ids_outcome == "rejected":
+        return rejected_clause
+    if ids_outcome == "failed":
+        return failed_clause
+    if ids_outcome == "skipped":
+        return skipped_clause
+    return AuditLog.action.like(f"{IDS_ACTION_PREFIX}%")
+
+
+def _infer_ids_domain(action: str) -> str | None:
+    if action == "ids_source_sync":
+        return "source_sync"
+    if action.startswith("ids_source_package_"):
+        return "source_package"
+    if action.startswith("ids_rulepack_"):
+        return "rulepack"
+    return None
+
+
+def _infer_ids_outcome(action: str, detail: str) -> str | None:
+    if not action.startswith(IDS_ACTION_PREFIX):
+        return None
+    if action.endswith("_rejected"):
+        return "rejected"
+    if action.endswith("_failed"):
+        return "failed"
+    if action == "ids_source_sync":
+        text = (detail or "").lower()
+        if "result=failed" in text:
+            return "failed"
+        if "result=skipped" in text:
+            return "skipped"
+    return "success"
