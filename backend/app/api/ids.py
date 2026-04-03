@@ -13,6 +13,7 @@ from ..api.deps import require_roles
 from ..config import settings
 from ..database import get_db
 from ..models.ids_event import IDSEvent
+from ..models.ids_rulepack import IDSRulepackActivation, IDSRulepackRuntimeState
 from ..models.ids_source import IDSSource, IDSSourceSyncAttempt
 from ..models.ids_source_package import IDSSourcePackageActivation, IDSSourcePackageIntake
 from ..services.ids_ai_analysis import is_llm_available, run_ai_analysis_sync
@@ -61,6 +62,20 @@ from ..services.ids_source_packages import (
     list_latest_package_activations,
     list_recent_package_activations,
     list_recent_package_intakes,
+)
+from ..services.ids_rulepacks import (
+    DEFAULT_RULEPACK_KEY,
+    RULEPACK_RESULT_ACTIVATED,
+    RULEPACK_RESULT_FAILED,
+    RULEPACK_RESULT_REJECTED,
+    TRUST_DEMO_TEST as RULEPACK_TRUST_DEMO_TEST,
+    create_rulepack_activation_record,
+    ensure_runtime_state,
+    get_rulepack_definition,
+    list_rulepack_catalog,
+    resolve_active_rulepack_key_from_db,
+    set_runtime_active_rulepack_key,
+    update_runtime_state,
 )
 
 router = APIRouter(prefix="/ids", tags=["ids"])
@@ -138,6 +153,12 @@ class SourcePackagePreviewRequest(BaseModel):
 
 class SourcePackageActivationRequest(BaseModel):
     package_intake_id: int
+    triggered_by: str
+    activation_note: str = ""
+
+
+class RulepackActivationRequest(BaseModel):
+    rulepack_key: str
     triggered_by: str
     activation_note: str = ""
 
@@ -624,6 +645,120 @@ def list_ids_source_packages(
         for row in rows
     ]
     return {"total": len(items), "items": items}
+
+
+@router.get("/rule-packs")
+def list_ids_rulepacks(
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    active_rulepack_key = resolve_active_rulepack_key_from_db(db)
+    runtime_state = ensure_runtime_state(db)
+    return {
+        "active_rulepack_key": active_rulepack_key,
+        "runtime_state": _serialize_rulepack_runtime_state(runtime_state),
+        "items": list_rulepack_catalog(),
+    }
+
+
+@router.post("/rule-packs/activate")
+def activate_ids_rulepack(
+    req: RulepackActivationRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    rulepack_key = (req.rulepack_key or "").strip()
+    triggered_by = (req.triggered_by or "").strip()[:64]
+    activation_note = (req.activation_note or "").strip()[:1000]
+
+    if not rulepack_key:
+        raise HTTPException(status_code=400, detail="rulepack_key is required")
+    if not triggered_by:
+        raise HTTPException(status_code=400, detail="triggered_by is required")
+
+    definition = get_rulepack_definition(rulepack_key)
+    if not definition:
+        detail = f"Unknown rulepack_key: {rulepack_key}"
+        activation = create_rulepack_activation_record(
+            db,
+            rulepack_key=rulepack_key,
+            result_status=RULEPACK_RESULT_FAILED,
+            triggered_by=triggered_by,
+            activation_detail=detail,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": detail,
+                "activation_id": activation.id,
+            },
+        )
+
+    if (definition.get("trust_classification") or "").strip() == RULEPACK_TRUST_DEMO_TEST:
+        detail = "demo_test rulepacks cannot be activated as trusted runtime coverage"
+        activation = create_rulepack_activation_record(
+            db,
+            rulepack_key=rulepack_key,
+            result_status=RULEPACK_RESULT_REJECTED,
+            triggered_by=triggered_by,
+            activation_detail=f"{detail}. {activation_note}".strip(),
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": detail,
+                "activation_id": activation.id,
+            },
+        )
+
+    current_key = resolve_active_rulepack_key_from_db(db)
+    if current_key == rulepack_key:
+        detail = activation_note or "Rulepack already active; activation re-recorded."
+    else:
+        detail = activation_note or "Rulepack activated for inline IDS matcher."
+
+    update_runtime_state(
+        db,
+        active_rulepack_key=rulepack_key,
+        updated_by=triggered_by,
+        update_note=detail,
+    )
+    activation = create_rulepack_activation_record(
+        db,
+        rulepack_key=rulepack_key,
+        result_status=RULEPACK_RESULT_ACTIVATED,
+        triggered_by=triggered_by,
+        activation_detail=detail,
+    )
+    set_runtime_active_rulepack_key(rulepack_key)
+    return {
+        "result_status": RULEPACK_RESULT_ACTIVATED,
+        "active_rulepack_key": rulepack_key,
+        "rulepack_key": rulepack_key,
+        "activation_id": activation.id,
+        "detail": detail,
+    }
+
+
+@router.get("/rule-packs/activations")
+def list_ids_rulepack_activations(
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    rows = (
+        db.query(IDSRulepackActivation)
+        .order_by(IDSRulepackActivation.created_at.desc(), IDSRulepackActivation.id.desc())
+        .limit(limit)
+        .all()
+    )
+    total = db.query(func.count(IDSRulepackActivation.id)).scalar() or 0
+    active_rulepack_key = resolve_active_rulepack_key_from_db(db)
+    return {
+        "total": int(total),
+        "active_rulepack_key": active_rulepack_key,
+        "items": [_serialize_rulepack_activation(row) for row in rows],
+    }
 
 
 @router.post("/events/ingest")
@@ -1500,6 +1635,31 @@ def _serialize_source_package_activation(activation: IDSSourcePackageActivation)
         "activated_at": _format_dt(activation.activated_at),
         "activated_by": activation.activated_by or "",
         "activation_detail": (activation.activation_detail or "")[:1000],
+        "created_at": _format_dt(activation.created_at),
+    }
+
+
+def _serialize_rulepack_runtime_state(state: IDSRulepackRuntimeState) -> dict:
+    return {
+        "id": state.id,
+        "active_rulepack_key": state.active_rulepack_key or DEFAULT_RULEPACK_KEY,
+        "updated_by": state.updated_by or "",
+        "update_note": (state.update_note or "")[:1000],
+        "updated_at": _format_dt(state.updated_at),
+        "created_at": _format_dt(state.created_at),
+    }
+
+
+def _serialize_rulepack_activation(activation: IDSRulepackActivation) -> dict:
+    return {
+        "id": activation.id,
+        "rulepack_key": activation.rulepack_key or "",
+        "pack_version": activation.pack_version or "",
+        "trust_classification": activation.trust_classification or "",
+        "detector_family": activation.detector_family or "",
+        "result_status": activation.result_status or "",
+        "activation_detail": (activation.activation_detail or "")[:1000],
+        "triggered_by": activation.triggered_by or "",
         "created_at": _format_dt(activation.created_at),
     }
 

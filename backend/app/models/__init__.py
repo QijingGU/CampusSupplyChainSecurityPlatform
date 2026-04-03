@@ -10,6 +10,7 @@ from .chat_history import ChatHistory
 from .audit_log import AuditLog
 from .ids_event import IDSEvent
 from .ids_source import IDSSource, IDSSourceSyncAttempt
+from .ids_rulepack import IDSRulepackActivation, IDSRulepackRuntimeState
 from .ids_source_package import IDSSourcePackageActivation, IDSSourcePackageIntake
 
 __all__ = [
@@ -29,6 +30,8 @@ __all__ = [
     "IDSEvent",
     "IDSSource",
     "IDSSourceSyncAttempt",
+    "IDSRulepackRuntimeState",
+    "IDSRulepackActivation",
     "IDSSourcePackageIntake",
     "IDSSourcePackageActivation",
 ]

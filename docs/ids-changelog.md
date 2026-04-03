@@ -288,3 +288,64 @@ security-center workflows change.
     `c405c79 feat: complete ids source package intake workflow`,
   - pushed `security-center/feature-ids` to GitHub so the branch is ready for a
     PR into `security-center/collab-setup`.
+
+## 2026-04-03
+
+- Synced workspace by recloning the latest repository snapshot from
+  `origin` and restoring work on `security-center/feature-ids`.
+- Audited completed `003-ids-source-package-intake` artifacts and confirmed all
+  tasks are marked done in `specs/003-ids-source-package-intake/tasks.md`.
+- Started the next IDS slice at
+  `specs/004-ids-mature-rulepack-adoption/` to prioritize mature static
+  rulepack reuse over expanding ad hoc local signatures.
+- Added `004` specification artifacts:
+  - `spec.md` with catalog/activation/history user stories,
+  - `plan.md` with constitution-aligned scope and file boundaries,
+  - `research.md`, `data-model.md`, `contracts/ids-rulepack-adoption.md`,
+    `quickstart.md`, and `tasks.md`,
+  - checklist at
+    `specs/004-ids-mature-rulepack-adoption/checklists/requirements.md`.
+- Task execution status:
+  - completed `T001-T003` for `004`,
+  - next implementation target is `T004-T007` (rulepack storage, services, and
+    listing API).
+- Completed backend implementation pass for `004` rulepack adoption:
+  - added rulepack runtime state + activation audit models in
+    `backend/app/models/ids_rulepack.py`,
+  - extended `backend/app/schema_sync.py` and `backend/app/models/__init__.py`
+    so runtime state and activation tables are created with IDS schema updates,
+  - added curated mature rulepack service in
+    `backend/app/services/ids_rulepacks.py`,
+  - rewired `backend/app/services/ids_engine.py` to use active runtime
+    rulepack signatures rather than fixed local-only constants,
+  - updated `backend/app/middleware/ids_middleware.py` to stamp
+    `source_version=rulepack:<active_key>` for inline matcher events,
+  - added rulepack APIs in `backend/app/api/ids.py`:
+    - `GET /api/ids/rule-packs`,
+    - `POST /api/ids/rule-packs/activate`,
+    - `GET /api/ids/rule-packs/activations`.
+- Frontend API typing support added in `frontend/src/api/ids.ts`:
+  - rulepack catalog response types,
+  - activation payload/response types,
+  - activation history response types.
+- Security-center UI integration completed for rulepack operations in
+  `frontend/src/views/security/SecurityIDS.vue`:
+  - added active runtime rulepack strip and refresh action,
+  - added rulepack list table with trust tags, metadata, and activate action,
+  - linked page actions to new rulepack catalog/activation/history APIs.
+- Validation:
+  - Python `py_compile` passes for updated/new backend files,
+  - frontend `npm run build` passes after installing dependencies (`npm install`),
+  - local TestClient smoke flow confirms:
+    - rulepack list API returns active key and catalog data,
+    - unknown rulepack activation returns HTTP 400 and is recorded as `failed`,
+    - `demo-seed-pack` activation returns HTTP 400 and is recorded as
+      `rejected`,
+    - `mature-web-balanced` activation returns HTTP 200 with
+      `result_status=activated`,
+    - activation history API returns latest-first records,
+    - runtime signature switching is effective: payload
+      `User-Agent: dirbuster` is unmatched in `legacy-inline` and matched as
+      `scanner` in `mature-web-balanced`.
+- Remaining gap for this slice:
+  - final delivery commit/push step (`T020`) is pending.

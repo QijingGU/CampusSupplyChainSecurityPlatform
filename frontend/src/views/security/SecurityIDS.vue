@@ -27,9 +27,14 @@ import {
   previewIDSSourcePackage,
   activateIDSSourcePackage,
   listIDSSourcePackages,
+  listIDSRulepacks,
+  activateIDSMatureRulepack,
+  listIDSRulepackActivations,
 } from '@/api/ids'
 import type {
   IDSEventItem,
+  IDSMatureRulepackActivationItem,
+  IDSMatureRulepackItem,
   IDSStatsResponse,
   IDSSourceItem,
   IDSSourcePackageActivationItem,
@@ -90,6 +95,11 @@ const sourceSummary = ref<IDSSourceListResponse['summary']>({
   trusted_count: 0,
   demo_test_count: 0,
 })
+const rulepackLoading = ref(false)
+const rulepackActivatingKey = ref<string>('')
+const activeRulepackKey = ref<string>('legacy-inline')
+const rulepackRows = ref<IDSMatureRulepackItem[]>([])
+const rulepackHistoryRows = ref<IDSMatureRulepackActivationItem[]>([])
 const detailVisible = ref(false)
 const currentRow = ref<IDSEventItem | null>(null)
 const simulatingAttack = ref(false)
@@ -369,6 +379,64 @@ async function fetchSources() {
     }
   } finally {
     sourceLoading.value = false
+  }
+}
+
+async function fetchRulepacks() {
+  rulepackLoading.value = true
+  try {
+    const [catalogRes, historyRes] = await Promise.all([
+      listIDSRulepacks(),
+      listIDSRulepackActivations({ limit: 5 }),
+    ])
+    const catalogData: any = catalogRes?.data ?? catalogRes
+    const historyData: any = historyRes?.data ?? historyRes
+    activeRulepackKey.value = catalogData?.active_rulepack_key || 'legacy-inline'
+    rulepackRows.value = catalogData?.items ?? []
+    rulepackHistoryRows.value = historyData?.items ?? []
+  } catch {
+    activeRulepackKey.value = 'legacy-inline'
+    rulepackRows.value = []
+    rulepackHistoryRows.value = []
+  } finally {
+    rulepackLoading.value = false
+  }
+}
+
+function rulepackTrustLabel(value: string | null | undefined): string {
+  if (value === 'external_mature') return '成熟外部'
+  if (value === 'transitional_local') return '过渡本地'
+  if (value === 'demo_test') return '演示测试'
+  return value?.trim() || '-'
+}
+
+function rulepackTrustTagType(value: string | null | undefined): 'success' | 'warning' | 'info' | 'danger' {
+  if (value === 'external_mature') return 'success'
+  if (value === 'transitional_local') return 'warning'
+  if (value === 'demo_test') return 'danger'
+  return 'info'
+}
+
+async function activateRulepack(row: IDSMatureRulepackItem) {
+  const key = row.rulepack_key
+  rulepackActivatingKey.value = key
+  try {
+    await activateIDSMatureRulepack({
+      rulepack_key: key,
+      triggered_by: 'system_admin',
+      activation_note: `security-center activate ${key}`,
+    })
+    ElMessage.success(`运行规则包已切换：${key}`)
+    await fetchRulepacks()
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail
+    if (detail?.message) {
+      ElMessage.error(detail.message)
+    } else {
+      ElMessage.error(e?.response?.data?.detail || e?.message || '规则包激活失败')
+    }
+  } finally {
+    rulepackActivatingKey.value = ''
   }
 }
 
@@ -1439,6 +1507,7 @@ onMounted(() => {
   idsHudClockTimer = setInterval(tickIdsHudClock, 1000)
   refreshIdsTableMaxHeight()
   fetchSources()
+  fetchRulepacks()
   fetchStats()
   fetchTrend()
   fetchData()
@@ -1587,6 +1656,68 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
             <span class="source-summary-tile__label">演示 / 测试</span>
           </div>
         </div>
+
+        <div class="rulepack-runtime-strip">
+          <div class="rulepack-runtime-strip__title">
+            运行规则包：
+            <span class="rulepack-runtime-strip__key">{{ activeRulepackKey || 'legacy-inline' }}</span>
+          </div>
+          <div class="rulepack-runtime-strip__meta" v-if="rulepackHistoryRows.length">
+            最近变更：{{ rulepackHistoryRows[0].rulepack_key }} / {{ rulepackHistoryRows[0].result_status }} / {{ fmtTableDateTime(rulepackHistoryRows[0].created_at) }}
+          </div>
+          <el-button size="small" @click="fetchRulepacks">刷新规则包</el-button>
+        </div>
+
+        <el-table :data="rulepackRows" v-loading="rulepackLoading" class="sec-table rulepack-table" style="width: 100%">
+          <el-table-column label="规则包" min-width="220">
+            <template #default="{ row }">
+              <div class="cell-stack">
+                <span class="cell-ellipsis">{{ row.display_name }}</span>
+                <span class="cell-sub cell-mono">{{ row.rulepack_key }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="类型" width="140">
+            <template #default="{ row }">
+              <el-tag size="small" :type="rulepackTrustTagType(row.trust_classification)">
+                {{ rulepackTrustLabel(row.trust_classification) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="版本" width="130">
+            <template #default="{ row }">
+              <span class="cell-sub cell-mono">{{ row.pack_version }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="规则数" width="90" align="center">
+            <template #default="{ row }">
+              {{ row.rule_count }}
+            </template>
+          </el-table-column>
+          <el-table-column label="说明" min-width="280">
+            <template #default="{ row }">
+              <span class="cell-sub" :title="row.provenance_note">{{ row.provenance_note || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="180" align="center">
+            <template #default="{ row }">
+              <button
+                type="button"
+                class="ids-act ids-act--ok"
+                :disabled="rulepackActivatingKey === row.rulepack_key || row.rulepack_key === activeRulepackKey"
+                @click="activateRulepack(row)"
+              >
+                {{
+                  rulepackActivatingKey === row.rulepack_key
+                    ? '激活中...'
+                    : row.rulepack_key === activeRulepackKey
+                      ? '当前运行中'
+                      : '激活'
+                }}
+              </button>
+            </template>
+          </el-table-column>
+        </el-table>
 
         <el-table :data="sourceRows" v-loading="sourceLoading" class="sec-table source-ops-table" style="width: 100%">
           <el-table-column label="规则源" min-width="200">
@@ -3185,6 +3316,37 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
   gap: 10px;
 }
 
+.rulepack-runtime-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.rulepack-runtime-strip__title {
+  color: rgba(226, 232, 240, 0.9);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rulepack-runtime-strip__key {
+  font-family: ui-monospace, Consolas, monospace;
+  color: #67e8f9;
+}
+
+.rulepack-runtime-strip__meta {
+  flex: 1;
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.9);
+}
+
+.rulepack-table {
+  margin-top: -4px;
+}
+
 .source-summary-tile {
   display: flex;
   flex-direction: column;
@@ -3251,6 +3413,10 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
 
   .source-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rulepack-runtime-strip {
+    flex-wrap: wrap;
   }
 }
 
