@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted, watch, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { DeleteFilled } from '@element-plus/icons-vue'
@@ -27,9 +28,14 @@ import {
   previewIDSSourcePackage,
   activateIDSSourcePackage,
   listIDSSourcePackages,
+  listIDSRulepacks,
+  activateIDSMatureRulepack,
+  listIDSRulepackActivations,
 } from '@/api/ids'
 import type {
   IDSEventItem,
+  IDSMatureRulepackActivationItem,
+  IDSMatureRulepackItem,
   IDSStatsResponse,
   IDSSourceItem,
   IDSSourcePackageActivationItem,
@@ -44,6 +50,7 @@ import type {
 type SourceFormState = IDSSourceRegistryPayload
 type PackagePreviewFormState = IDSSourcePackagePreviewPayload
 type PackageActivationFormState = { package_intake_id: number; triggered_by: string; activation_note: string }
+const router = useRouter()
 
 const loading = ref(false)
 const trendDays = ref(7)
@@ -90,6 +97,11 @@ const sourceSummary = ref<IDSSourceListResponse['summary']>({
   trusted_count: 0,
   demo_test_count: 0,
 })
+const rulepackLoading = ref(false)
+const rulepackActivatingKey = ref<string>('')
+const activeRulepackKey = ref<string>('legacy-inline')
+const rulepackRows = ref<IDSMatureRulepackItem[]>([])
+const rulepackHistoryRows = ref<IDSMatureRulepackActivationItem[]>([])
 const detailVisible = ref(false)
 const currentRow = ref<IDSEventItem | null>(null)
 const simulatingAttack = ref(false)
@@ -118,6 +130,7 @@ const phase1UnlockCounter = ref(0)
 const phase2UnlockCounter = ref(0)
 const phase1Unlocked = ref(false)
 const phase2Unlocked = ref(false)
+const demoOpsEnabled = String(import.meta.env.VITE_IDS_ENABLE_DEMO || '').toLowerCase() === 'true'
 let phase1UnlockTimer: ReturnType<typeof setTimeout> | null = null
 let phase2UnlockTimer: ReturnType<typeof setTimeout> | null = null
 const clearArmed = ref(false)
@@ -372,6 +385,68 @@ async function fetchSources() {
   }
 }
 
+async function fetchRulepacks() {
+  rulepackLoading.value = true
+  try {
+    const [catalogRes, historyRes] = await Promise.all([
+      listIDSRulepacks(),
+      listIDSRulepackActivations({ limit: 5 }),
+    ])
+    const catalogData: any = catalogRes?.data ?? catalogRes
+    const historyData: any = historyRes?.data ?? historyRes
+    activeRulepackKey.value = catalogData?.active_rulepack_key || 'legacy-inline'
+    rulepackRows.value = catalogData?.items ?? []
+    rulepackHistoryRows.value = historyData?.items ?? []
+  } catch {
+    activeRulepackKey.value = 'legacy-inline'
+    rulepackRows.value = []
+    rulepackHistoryRows.value = []
+  } finally {
+    rulepackLoading.value = false
+  }
+}
+
+function openSecurityAudit() {
+  router.push('/security/audit')
+}
+
+function rulepackTrustLabel(value: string | null | undefined): string {
+  if (value === 'external_mature') return '成熟外部'
+  if (value === 'transitional_local') return '过渡本地'
+  if (value === 'demo_test') return '演示测试'
+  return value?.trim() || '-'
+}
+
+function rulepackTrustTagType(value: string | null | undefined): 'success' | 'warning' | 'info' | 'danger' {
+  if (value === 'external_mature') return 'success'
+  if (value === 'transitional_local') return 'warning'
+  if (value === 'demo_test') return 'danger'
+  return 'info'
+}
+
+async function activateRulepack(row: IDSMatureRulepackItem) {
+  const key = row.rulepack_key
+  rulepackActivatingKey.value = key
+  try {
+    await activateIDSMatureRulepack({
+      rulepack_key: key,
+      triggered_by: 'system_admin',
+      activation_note: `security-center activate ${key}`,
+    })
+    ElMessage.success(`运行规则包已切换：${key}`)
+    await fetchRulepacks()
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail
+    if (detail?.message) {
+      ElMessage.error(detail.message)
+    } else {
+      ElMessage.error(e?.response?.data?.detail || e?.message || '规则包激活失败')
+    }
+  } finally {
+    rulepackActivatingKey.value = ''
+  }
+}
+
 function parseDateTime(v: string | null | undefined): Date | null {
   if (!v) return null
   const dt = new Date(v.replace(' ', 'T'))
@@ -409,6 +484,14 @@ function sourceClassificationLabel(value: string | null | undefined): string {
   if (value === 'external_mature') return '成熟规则源'
   if (value === 'custom_project') return '项目自定义'
   if (value === 'transitional_local') return '过渡本地检测'
+  return value?.trim() || '-'
+}
+
+function detectorFamilyLabel(value: string | null | undefined): string {
+  if (value === 'network') return '网络流量（IP/端口层）'
+  if (value === 'web') return 'Web请求（URL/参数）'
+  if (value === 'file') return '文件内容（上传/落地）'
+  if (value === 'log') return '日志事件（系统/应用日志）'
   return value?.trim() || '-'
 }
 
@@ -1342,6 +1425,7 @@ function reportFingerprint() {
 }
 
 function handlePhase1SecretTap() {
+  if (!demoOpsEnabled) return
   phase1UnlockCounter.value += 1
   if (phase1UnlockTimer) clearTimeout(phase1UnlockTimer)
   phase1UnlockTimer = setTimeout(() => {
@@ -1355,6 +1439,7 @@ function handlePhase1SecretTap() {
 }
 
 function handlePhase2SecretTap() {
+  if (!demoOpsEnabled) return
   phase2UnlockCounter.value += 1
   if (phase2UnlockTimer) clearTimeout(phase2UnlockTimer)
   phase2UnlockTimer = setTimeout(() => {
@@ -1439,6 +1524,7 @@ onMounted(() => {
   idsHudClockTimer = setInterval(tickIdsHudClock, 1000)
   refreshIdsTableMaxHeight()
   fetchSources()
+  fetchRulepacks()
   fetchStats()
   fetchTrend()
   fetchData()
@@ -1493,7 +1579,7 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
         <span class="sec-hud-pipeline__sep">·</span>
         <span class="sec-hud-pipeline__step">归档管理</span>
       </div>
-      <div v-if="phase1Unlocked || phase2Unlocked" class="demo-secret-actions" />
+      <div v-if="demoOpsEnabled && (phase1Unlocked || phase2Unlocked)" class="demo-secret-actions" />
     </header>
 
     <main class="sec-main">
@@ -1556,10 +1642,14 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
           <div>
             <div class="chart-title">受信规则源运营</div>
             <div class="source-ops-card__subtitle">
-              聚焦规则源健康度、演示数据隔离和同步留痕，让规则包变更能被看见、被追溯。
+              聚焦规则源健康度、生产与测试隔离和同步留痕，让规则包变更能被看见、被追溯。
             </div>
           </div>
+          <div class="source-ops-card__glossary">
+            规则源：一组可持续更新的检测规则集合；检测场景：这组规则主要识别哪类数据（网络流量 / Web请求 / 文件 / 日志）。
+          </div>
           <div class="source-ops-card__actions">
+            <el-button type="success" @click="openSecurityAudit">IDS审计追踪</el-button>
             <el-button @click="openPackagePreviewDialog()">预览规则包</el-button>
             <el-button type="primary" @click="openSourceCreateDialog">新增规则源</el-button>
           </div>
@@ -1587,6 +1677,68 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
             <span class="source-summary-tile__label">演示 / 测试</span>
           </div>
         </div>
+
+        <div class="rulepack-runtime-strip">
+          <div class="rulepack-runtime-strip__title">
+            运行规则包：
+            <span class="rulepack-runtime-strip__key">{{ activeRulepackKey || 'legacy-inline' }}</span>
+          </div>
+          <div class="rulepack-runtime-strip__meta" v-if="rulepackHistoryRows.length">
+            最近变更：{{ rulepackHistoryRows[0].rulepack_key }} / {{ rulepackHistoryRows[0].result_status }} / {{ fmtTableDateTime(rulepackHistoryRows[0].created_at) }}
+          </div>
+          <el-button size="small" @click="fetchRulepacks">刷新规则包</el-button>
+        </div>
+
+        <el-table :data="rulepackRows" v-loading="rulepackLoading" class="sec-table rulepack-table" style="width: 100%">
+          <el-table-column label="规则包" min-width="220">
+            <template #default="{ row }">
+              <div class="cell-stack">
+                <span class="cell-ellipsis">{{ row.display_name }}</span>
+                <span class="cell-sub cell-mono">{{ row.rulepack_key }}</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="类型" width="140">
+            <template #default="{ row }">
+              <el-tag size="small" :type="rulepackTrustTagType(row.trust_classification)">
+                {{ rulepackTrustLabel(row.trust_classification) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="版本" width="130">
+            <template #default="{ row }">
+              <span class="cell-sub cell-mono">{{ row.pack_version }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="规则数" width="90" align="center">
+            <template #default="{ row }">
+              {{ row.rule_count }}
+            </template>
+          </el-table-column>
+          <el-table-column label="说明" min-width="280">
+            <template #default="{ row }">
+              <span class="cell-sub" :title="row.provenance_note">{{ row.provenance_note || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="180" align="center">
+            <template #default="{ row }">
+              <button
+                type="button"
+                class="ids-act ids-act--ok"
+                :disabled="rulepackActivatingKey === row.rulepack_key || row.rulepack_key === activeRulepackKey"
+                @click="activateRulepack(row)"
+              >
+                {{
+                  rulepackActivatingKey === row.rulepack_key
+                    ? '激活中...'
+                    : row.rulepack_key === activeRulepackKey
+                      ? '当前运行中'
+                      : '激活'
+                }}
+              </button>
+            </template>
+          </el-table-column>
+        </el-table>
 
         <el-table :data="sourceRows" v-loading="sourceLoading" class="sec-table source-ops-table" style="width: 100%">
           <el-table-column label="规则源" min-width="200">
@@ -1750,8 +1902,8 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
         <el-button type="success" :disabled="!selectedIds.length" @click="handleBatchArchive">
           批量归档 ({{ selectedIds.length }})
         </el-button>
-        <el-button type="warning" :loading="simulatingAttack" @click="handleSimulateAttack">
-          演示注入（不计入真实指标）
+        <el-button v-if="demoOpsEnabled" type="warning" :loading="simulatingAttack" @click="handleSimulateAttack">
+          测试注入（仅测试环境）
         </el-button>
         <el-button type="info" @click="openEvidenceTimeline">证据链时间轴</el-button>
       </div>
@@ -1906,7 +2058,7 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
           class="sec-pagination"
           @current-change="(p: number) => { pageOffset = (p - 1) * pageSize; fetchData() }"
         />
-        <div class="demo-clear-area">
+        <div v-if="demoOpsEnabled" class="demo-clear-area">
           <el-button
             class="demo-clear-logo"
             :class="{ armed: clearArmed }"
@@ -1941,13 +2093,14 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
             <el-option label="演示 / 测试" value="demo_test" />
           </el-select>
         </el-form-item>
-        <el-form-item label="检测家族">
+        <el-form-item label="检测场景">
           <el-select v-model="packagePreviewForm.detector_family" class="sec-select">
-            <el-option label="网络" value="network" />
-            <el-option label="网页" value="web" />
-            <el-option label="文件" value="file" />
-            <el-option label="日志" value="log" />
+            <el-option label="网络流量（IP/端口层）" value="network" />
+            <el-option label="Web请求（URL/参数）" value="web" />
+            <el-option label="文件内容（上传/落地）" value="file" />
+            <el-option label="日志事件（系统/应用日志）" value="log" />
           </el-select>
+          <div class="form-field-hint">用于标记这份规则包主要检测哪类数据。</div>
         </el-form-item>
         <el-form-item label="触发人">
           <el-input v-model="packagePreviewForm.triggered_by" placeholder="system_admin" />
@@ -2011,13 +2164,14 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
             <el-option label="演示 / 测试" value="demo_test" />
           </el-select>
         </el-form-item>
-        <el-form-item label="检测家族">
+        <el-form-item label="检测场景">
           <el-select v-model="sourceForm.detector_family" class="sec-select">
-            <el-option label="网络" value="network" />
-            <el-option label="网页" value="web" />
-            <el-option label="文件" value="file" />
-            <el-option label="日志" value="log" />
+            <el-option label="网络流量（IP/端口层）" value="network" />
+            <el-option label="Web请求（URL/参数）" value="web" />
+            <el-option label="文件内容（上传/落地）" value="file" />
+            <el-option label="日志事件（系统/应用日志）" value="log" />
           </el-select>
+          <div class="form-field-hint">告诉系统：这个规则源主要覆盖哪种检测场景。</div>
         </el-form-item>
         <el-form-item label="运行状态">
           <el-select v-model="sourceForm.operational_status" class="sec-select">
@@ -2258,8 +2412,8 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
               <span class="detail-value">{{ currentRow.detector_name || '-' }}</span>
             </div>
             <div class="detail-item">
-              <span class="detail-label">检测家族</span>
-              <span class="detail-value">{{ currentRow.detector_family || '-' }}</span>
+              <span class="detail-label">检测场景</span>
+              <span class="detail-value">{{ detectorFamilyLabel(currentRow.detector_family) }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">规则 ID</span>
@@ -3179,10 +3333,52 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
   color: rgba(226, 232, 240, 0.76);
 }
 
+.source-ops-card__glossary {
+  padding: 8px 10px;
+  border: 1px dashed rgba(56, 189, 248, 0.35);
+  border-radius: 8px;
+  background: rgba(12, 22, 41, 0.52);
+  color: rgba(191, 219, 254, 0.95);
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 560px;
+}
+
 .source-summary-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
+}
+
+.rulepack-runtime-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.rulepack-runtime-strip__title {
+  color: rgba(226, 232, 240, 0.9);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.rulepack-runtime-strip__key {
+  font-family: ui-monospace, Consolas, monospace;
+  color: #67e8f9;
+}
+
+.rulepack-runtime-strip__meta {
+  flex: 1;
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.9);
+}
+
+.rulepack-table {
+  margin-top: -4px;
 }
 
 .source-summary-tile {
@@ -3238,6 +3434,13 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
   width: 100%;
 }
 
+.form-field-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(191, 219, 254, 0.82);
+}
+
 @media (max-width: 1280px) {
   .source-summary-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3251,6 +3454,10 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
 
   .source-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rulepack-runtime-strip {
+    flex-wrap: wrap;
   }
 }
 

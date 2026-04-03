@@ -15,6 +15,7 @@ from ..services.ids_ingestion import (
     SOURCE_TRANSITIONAL_LOCAL,
     apply_source_metadata,
 )
+from ..services.ids_rulepacks import get_runtime_active_rulepack_key
 
 logger = logging.getLogger("ids")
 
@@ -102,6 +103,7 @@ class IDSMiddleware(BaseHTTPMiddleware):
         db = SessionLocal()
         evt_id: int | None = None
         try:
+            active_rulepack_key = get_runtime_active_rulepack_key()
             evt = IDSEvent(
                 client_ip=client_ip,
                 attack_type=attack_type,
@@ -131,7 +133,7 @@ class IDSMiddleware(BaseHTTPMiddleware):
                 detector_name="inline_request_matcher",
                 source_rule_id=signature_matched[:128],
                 source_rule_name=attack_type,
-                source_version="legacy-inline",
+                source_version=f"rulepack:{active_rulepack_key}",
                 source_freshness="current",
             )
             db.add(evt)

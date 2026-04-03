@@ -79,8 +79,8 @@ export interface IDSTrendResponse {
   counts: number[]
 }
 
-// Source operations and package-history payloads for the IDS security-center
-// registry panel.
+// Source operations, package history, and mature rulepack payloads for the IDS
+// security-center registry panel.
 export interface IDSSourceSyncAttemptItem {
   id: number
   source_id: number
@@ -240,6 +240,61 @@ export interface IDSSourcePackageHistoryResponse {
   items: IDSSourcePackageHistoryItem[]
 }
 
+export interface IDSMatureRulepackItem {
+  rulepack_key: string
+  display_name: string
+  pack_version: string
+  trust_classification: string
+  detector_family: string
+  provenance_note: string
+  rule_count: number
+}
+
+export interface IDSMatureRulepackListResponse {
+  active_rulepack_key: string
+  runtime_state?: {
+    id: number
+    active_rulepack_key: string
+    updated_by: string
+    update_note: string
+    updated_at: string | null
+    created_at: string | null
+  }
+  items: IDSMatureRulepackItem[]
+}
+
+export interface IDSMatureRulepackActivationPayload {
+  rulepack_key: string
+  triggered_by: string
+  activation_note?: string
+}
+
+export interface IDSMatureRulepackActivationResponse {
+  result_status: string
+  active_rulepack_key: string
+  rulepack_key: string
+  activation_id: number
+  detail: string
+}
+
+export interface IDSMatureRulepackActivationItem {
+  id: number
+  rulepack_key: string
+  pack_version: string
+  trust_classification: string
+  detector_family: string
+  result_status: string
+  activation_detail: string
+  triggered_by: string
+  created_at: string | null
+}
+
+export interface IDSMatureRulepackActivationHistoryResponse {
+  total: number
+  active_rulepack_key: string
+  items: IDSMatureRulepackActivationItem[]
+}
+
 export function getIDSTrend(
   days?: number,
   params?: { event_origin?: string; source_classification?: string },
@@ -275,6 +330,18 @@ export function activateIDSSourcePackage(data: IDSSourcePackageActivationPayload
 
 export function listIDSSourcePackages(params?: { source_id?: number; source_key?: string; limit?: number }) {
   return request.get<IDSSourcePackageHistoryResponse>('/ids/source-packages', { params })
+}
+
+export function listIDSRulepacks() {
+  return request.get<IDSMatureRulepackListResponse>('/ids/rule-packs')
+}
+
+export function activateIDSMatureRulepack(data: IDSMatureRulepackActivationPayload) {
+  return request.post<IDSMatureRulepackActivationResponse>('/ids/rule-packs/activate', data)
+}
+
+export function listIDSRulepackActivations(params?: { limit?: number }) {
+  return request.get<IDSMatureRulepackActivationHistoryResponse>('/ids/rule-packs/activations', { params })
 }
 
 export function archiveIDSEvent(eventId: number) {

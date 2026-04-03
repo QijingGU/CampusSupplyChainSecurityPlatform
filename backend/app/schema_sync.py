@@ -1,6 +1,7 @@
 from sqlalchemy import inspect, text
 
 from .database import Base
+from .models.ids_rulepack import IDSRulepackActivation, IDSRulepackRuntimeState
 from .models.ids_source import IDSSource, IDSSourceSyncAttempt
 from .models.ids_source_package import IDSSourcePackageActivation, IDSSourcePackageIntake
 
@@ -77,6 +78,8 @@ def ensure_schema(engine):
         tables=[
             IDSSource.__table__,
             IDSSourceSyncAttempt.__table__,
+            IDSRulepackRuntimeState.__table__,
+            IDSRulepackActivation.__table__,
             IDSSourcePackageIntake.__table__,
             IDSSourcePackageActivation.__table__,
         ],

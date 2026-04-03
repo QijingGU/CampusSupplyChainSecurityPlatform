@@ -288,3 +288,161 @@ security-center workflows change.
     `c405c79 feat: complete ids source package intake workflow`,
   - pushed `security-center/feature-ids` to GitHub so the branch is ready for a
     PR into `security-center/collab-setup`.
+
+## 2026-04-03
+
+- Synced workspace by recloning the latest repository snapshot from
+  `origin` and restoring work on `security-center/feature-ids`.
+- Audited completed `003-ids-source-package-intake` artifacts and confirmed all
+  tasks are marked done in `specs/003-ids-source-package-intake/tasks.md`.
+- Started the next IDS slice at
+  `specs/004-ids-mature-rulepack-adoption/` to prioritize mature static
+  rulepack reuse over expanding ad hoc local signatures.
+- Added `004` specification artifacts:
+  - `spec.md` with catalog/activation/history user stories,
+  - `plan.md` with constitution-aligned scope and file boundaries,
+  - `research.md`, `data-model.md`, `contracts/ids-rulepack-adoption.md`,
+    `quickstart.md`, and `tasks.md`,
+  - checklist at
+    `specs/004-ids-mature-rulepack-adoption/checklists/requirements.md`.
+- Task execution status:
+  - completed `T001-T003` for `004`,
+  - next implementation target is `T004-T007` (rulepack storage, services, and
+    listing API).
+- Completed backend implementation pass for `004` rulepack adoption:
+  - added rulepack runtime state + activation audit models in
+    `backend/app/models/ids_rulepack.py`,
+  - extended `backend/app/schema_sync.py` and `backend/app/models/__init__.py`
+    so runtime state and activation tables are created with IDS schema updates,
+  - added curated mature rulepack service in
+    `backend/app/services/ids_rulepacks.py`,
+  - rewired `backend/app/services/ids_engine.py` to use active runtime
+    rulepack signatures rather than fixed local-only constants,
+  - updated `backend/app/middleware/ids_middleware.py` to stamp
+    `source_version=rulepack:<active_key>` for inline matcher events,
+  - added rulepack APIs in `backend/app/api/ids.py`:
+    - `GET /api/ids/rule-packs`,
+    - `POST /api/ids/rule-packs/activate`,
+    - `GET /api/ids/rule-packs/activations`.
+- Frontend API typing support added in `frontend/src/api/ids.ts`:
+  - rulepack catalog response types,
+  - activation payload/response types,
+  - activation history response types.
+- Security-center UI integration completed for rulepack operations in
+  `frontend/src/views/security/SecurityIDS.vue`:
+  - added active runtime rulepack strip and refresh action,
+  - added rulepack list table with trust tags, metadata, and activate action,
+  - linked page actions to new rulepack catalog/activation/history APIs.
+- Validation:
+  - Python `py_compile` passes for updated/new backend files,
+  - frontend `npm run build` passes after installing dependencies (`npm install`),
+  - local TestClient smoke flow confirms:
+    - rulepack list API returns active key and catalog data,
+    - unknown rulepack activation returns HTTP 400 and is recorded as `failed`,
+    - `demo-seed-pack` activation returns HTTP 400 and is recorded as
+      `rejected`,
+    - `mature-web-balanced` activation returns HTTP 200 with
+      `result_status=activated`,
+    - activation history API returns latest-first records,
+    - runtime signature switching is effective: payload
+      `User-Agent: dirbuster` is unmatched in `legacy-inline` and matched as
+      `scanner` in `mature-web-balanced`.
+- Remaining gap for this slice:
+  - final delivery commit/push step (`T020`) is pending.
+- Reprioritized to IDS auditability and completed new slice scaffolding:
+  - created `specs/005-ids-log-audit/` with `spec.md`, `plan.md`, `research.md`,
+    `data-model.md`, `contracts/ids-log-audit.md`, `quickstart.md`, `tasks.md`,
+    and requirements checklist,
+  - set `005` execution focus to log retrieval quality and IDS operation trace
+    completeness.
+- Completed backend log-audit enhancement:
+  - rewrote `backend/app/api/audit.py` to support pagination, keyword/user/time
+    filtering, IDS-only and sensitive-only filtering, summary metrics, and
+    dynamic filter options,
+  - preserved the existing `audit_logs` schema and derived `is_ids` /
+    `is_sensitive` in response serialization for low-risk rollout.
+- Completed IDS audit write coverage in `backend/app/api/ids.py`:
+  - source sync now records `ids_source_sync`,
+  - source package preview records success and rejected paths,
+  - source package activation records success and rejected paths,
+  - rulepack activation records success, rejected, and failed paths.
+- Completed audit frontend rebuild:
+  - `frontend/src/api/audit.ts` now matches the enhanced `/api/audit` contract,
+  - `frontend/src/views/audit/AuditLogs.vue` is now Chinese-first with summary
+    cards, IDS/sensitive tabs, combined filters, and pagination.
+- Validation for `005` current pass:
+  - Python `py_compile` passes for
+    `backend/app/api/audit.py`, `backend/app/api/ids.py`,
+    `backend/app/services/audit.py`,
+  - frontend `npm run build` passes after audit page and API typing updates.
+- Next step:
+  - run manual endpoint/UI checks for `005`, then commit and push branch updates
+    for PR review.
+- Delivery:
+  - committed IDS log-audit slice as
+    `feat: add ids log audit workflow and chinese audit panel`,
+  - pushed `security-center/feature-ids` to `origin` at commit `b630b41`.
+- Continued hardening for log-audit completeness and terminology quality:
+  - extended `GET /api/audit` with IDS-specific dimensions:
+    - query filters `ids_domain` and `ids_outcome`,
+    - summary metrics `ids_by_domain` and `ids_by_outcome`,
+    - per-row derived fields `ids_domain` and `ids_outcome`,
+  - rebuilt the audit page with clearer Chinese-first copy and stronger IDS
+    review flow:
+    - IDS tab now supports module/outcome filtering and quick time ranges,
+    - IDS table now shows module and result columns for faster triage,
+    - IDS result strip (`成功/被拒绝/失败/跳过`) is visible during IDS review,
+  - improved IDS page wording to reduce mechanical terminology confusion:
+    - added in-page glossary text explaining “规则源” and “检测场景” in plain
+      language,
+    - event detail now shows detector family through a human-readable label
+      mapper instead of raw enum strings.
+- Validation for the hardening pass:
+  - Python `py_compile` passes for `backend/app/api/audit.py`,
+  - frontend `npm run build` passes after audit and IDS wording updates.
+- Continued production-focused audit split and UI consolidation:
+  - moved IDS audit operations to a dedicated security-center page
+    `frontend/src/views/security/SecurityIDSAudit.vue` at `/security/audit`,
+  - updated `frontend/src/views/security/SecurityCenterLayout.vue` and
+    `frontend/src/router/routes.ts` so IDS review is accessed from Security
+    Center navigation,
+  - changed generic `frontend/src/views/audit/AuditLogs.vue` to business/daily
+    supervision mode and exclude IDS rows by default.
+- Backend/API update for audit separation:
+  - added `exclude_ids` query support to `GET /api/audit` in
+    `backend/app/api/audit.py`,
+  - aligned frontend audit params in `frontend/src/api/audit.ts`.
+- IDS terminology and demo-isolation hardening:
+  - replaced mechanical wording around detector family with clearer
+    “检测场景” and plain-language hints in
+    `frontend/src/views/security/SecurityIDS.vue`,
+  - added `VITE_IDS_ENABLE_DEMO` gate so demo/test operation controls are
+    hidden by default in production-facing workflows.
+- Spec Kit alignment pass:
+  - synchronized `specs/005-ids-log-audit/spec.md` and
+    `specs/005-ids-log-audit/tasks.md` with the split model
+    (`/audit` for business, `/security/audit` for IDS).
+- Validation for this pass:
+  - Python `py_compile` passes for `backend/app/api/audit.py`,
+  - frontend `npm run build` passes after route/layout/audit/IDS updates.
+- Fixed IDS audit tracking route-loading regression:
+  - removed route-switch forced loading in
+    `frontend/src/views/security/SecurityCenterLayout.vue`, so entering
+    `/security/audit` no longer gets stuck in infinite loading before refresh.
+- Rebuilt `frontend/src/views/security/SecurityIDSAudit.vue` for production UI quality:
+  - upgraded visual contrast and spacing to align with Security Center style,
+  - replaced old mechanical/unclear text with clear Chinese labels,
+  - improved filter readability and table hierarchy for daily use,
+  - added request timeout + error fallback to avoid endless in-table loading
+    state when API calls stall.
+- Validation for UI/stability fix:
+  - frontend `npm run build` passes after IDS audit page/style refactor.
+- UI redesign follow-up for reviewer acceptance:
+  - rebuilt `frontend/src/views/security/SecurityIDSAudit.vue` again with a
+    tighter operations-panel visual language aligned to Security Center,
+  - switched to clearer Chinese-first wording for all section labels, filters,
+    and table columns,
+  - increased contrast between background/panel/text colors to improve
+    readability and reduce low-contrast blur.
+- Validation for redesign pass:
+  - frontend `npm run build` passes after the `/security/audit` redesign.
