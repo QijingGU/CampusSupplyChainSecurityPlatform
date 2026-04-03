@@ -352,35 +352,22 @@ onMounted(() => {
 
 <style scoped>
 .ids-audit-page {
-  --bg-base: #040b16;
-  --bg-panel: rgba(6, 18, 39, 0.92);
-  --bg-panel-top: rgba(8, 34, 68, 0.6);
-  --line-main: rgba(65, 157, 255, 0.32);
-  --line-soft: rgba(55, 124, 203, 0.24);
-  --text-main: #f2f8ff;
-  --text-sub: #c2d4ed;
-  --text-muted: #8ea7c5;
-  --brand: #61b6ff;
-  --ok: #22c55e;
-  --warn: #f59e0b;
-  --danger: #ef4444;
-  --font-cn: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-
   min-height: 100%;
-  padding: 16px 18px 18px;
-  font-family: var(--font-cn);
-  color: var(--text-main);
+  padding: 14px 16px 16px;
+  color: #eaf4ff;
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   background:
-    radial-gradient(circle at 0 0, rgba(16, 78, 147, 0.28), transparent 38%),
-    radial-gradient(circle at 100% 0, rgba(11, 103, 172, 0.18), transparent 36%),
-    var(--bg-base);
+    radial-gradient(circle at 6% 4%, rgba(34, 99, 180, 0.24), transparent 34%),
+    radial-gradient(circle at 98% 0, rgba(35, 123, 214, 0.16), transparent 36%),
+    #050d1b;
 }
 
 .audit-hero {
-  border: 1px solid var(--line-main);
+  padding: 14px 16px 13px;
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(9, 28, 55, 0.9), rgba(5, 18, 37, 0.9));
-  padding: 14px 16px 12px;
+  border: 1px solid rgba(89, 156, 230, 0.32);
+  background: linear-gradient(180deg, rgba(9, 34, 68, 0.92), rgba(5, 18, 38, 0.95));
+  box-shadow: inset 0 1px 0 rgba(132, 186, 251, 0.15);
   margin-bottom: 12px;
 }
 
@@ -394,40 +381,40 @@ onMounted(() => {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #39d2ff;
-  box-shadow: 0 0 10px rgba(57, 210, 255, 0.6);
+  background: #3ac8ff;
+  box-shadow: 0 0 10px rgba(58, 200, 255, 0.7);
 }
 
 .meta-text {
-  color: #9cc5ef;
+  color: #9dc9f7;
   font-size: 12px;
   letter-spacing: 0.04em;
 }
 
 .meta-badge {
   margin-left: 4px;
-  font-size: 12px;
-  line-height: 18px;
   border-radius: 8px;
   padding: 0 8px;
-  border: 1px solid rgba(110, 255, 180, 0.5);
-  color: #9af9c5;
-  background: rgba(27, 94, 59, 0.36);
+  font-size: 12px;
+  line-height: 20px;
+  border: 1px solid rgba(121, 248, 187, 0.45);
+  color: #b2ffd9;
+  background: rgba(24, 95, 62, 0.38);
 }
 
 .audit-hero__title {
   margin: 8px 0 4px;
-  font-size: 28px;
-  line-height: 1.2;
-  font-weight: 700;
-  color: var(--text-main);
+  font-size: 34px;
+  line-height: 1.15;
+  font-weight: 800;
+  color: #f7fbff !important;
 }
 
 .audit-hero__desc {
   margin: 0;
   font-size: 13px;
-  color: var(--text-sub);
   line-height: 1.5;
+  color: #bfd6f4 !important;
 }
 
 .summary-grid {
@@ -438,14 +425,14 @@ onMounted(() => {
 }
 
 .summary-card {
-  background: linear-gradient(180deg, rgba(8, 33, 69, 0.84), rgba(5, 18, 39, 0.9));
-  border: 1px solid var(--line-soft);
+  border: 1px solid rgba(70, 136, 209, 0.28);
   border-radius: 10px;
-  padding: 12px 14px;
+  background: linear-gradient(180deg, rgba(8, 30, 60, 0.92), rgba(5, 17, 36, 0.92));
+  padding: 12px 13px;
 }
 
 .summary-card--ok {
-  border-color: rgba(34, 197, 94, 0.44);
+  border-color: rgba(52, 211, 153, 0.44);
 }
 
 .summary-card--warn {
@@ -457,28 +444,28 @@ onMounted(() => {
 }
 
 .summary-card--neutral {
-  border-color: rgba(148, 163, 184, 0.44);
+  border-color: rgba(148, 163, 184, 0.4);
 }
 
 .summary-label {
   font-size: 12px;
-  color: var(--text-sub);
+  color: #b8d2ef;
 }
 
 .summary-value {
   display: block;
   margin-top: 8px;
-  font-size: 30px;
+  font-size: 32px;
   line-height: 1;
-  font-weight: 700;
-  color: #ffffff;
+  font-weight: 800;
+  color: #ffffff !important;
 }
 
 .sec-panel {
-  border: 1px solid var(--line-main);
-  border-radius: 12px;
-  background: linear-gradient(180deg, var(--bg-panel-top), var(--bg-panel));
   padding: 12px;
+  border: 1px solid rgba(86, 151, 224, 0.32);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(8, 29, 57, 0.86), rgba(5, 17, 37, 0.95));
 }
 
 .sec-panel + .sec-panel {
@@ -495,8 +482,8 @@ onMounted(() => {
 
 .sec-panel__title {
   font-size: 15px;
-  font-weight: 600;
-  color: #d8ebff;
+  font-weight: 700;
+  color: #ddedff;
 }
 
 .sec-panel__actions {
@@ -511,9 +498,9 @@ onMounted(() => {
 }
 
 .quick-row {
-  margin-top: 8px;
+  margin-top: 7px;
   display: flex;
-  gap: 6px;
+  gap: 8px;
 }
 
 .field-sm {
@@ -536,37 +523,41 @@ onMounted(() => {
 }
 
 .domain-strip__item {
-  border: 1px solid rgba(108, 166, 240, 0.3);
   border-radius: 8px;
-  color: #b8d7fa;
-  background: rgba(10, 34, 67, 0.66);
+  border: 1px solid rgba(114, 173, 241, 0.32);
+  background: rgba(9, 33, 63, 0.72);
+  color: #bdd9fb;
+  padding: 2px 9px;
   font-size: 12px;
-  padding: 2px 8px;
 }
 
 .audit-table :deep(.el-table),
 .audit-table :deep(.el-table__inner-wrapper),
 .audit-table :deep(.el-table__header-wrapper),
 .audit-table :deep(.el-table__body-wrapper) {
-  background: transparent;
+  background: transparent !important;
 }
 
 .audit-table :deep(th.el-table__cell) {
-  background: rgba(11, 43, 79, 0.92);
-  color: #d5e9ff;
-  font-weight: 600;
+  background: rgba(12, 46, 86, 0.94) !important;
+  color: #ddecff !important;
+  font-weight: 700;
 }
 
 .audit-table :deep(td.el-table__cell) {
-  background: rgba(5, 19, 40, 0.82);
-  color: #edf5ff;
+  color: #ebf4ff !important;
+  background: rgba(6, 21, 43, 0.88) !important;
+}
+
+.audit-table :deep(.el-table__body tr.el-table__row--striped td.el-table__cell) {
+  background: rgba(10, 33, 64, 0.88) !important;
 }
 
 .empty-state {
   margin-top: 10px;
   text-align: center;
-  color: var(--text-muted);
   font-size: 13px;
+  color: #95afcb;
 }
 
 .pager {
@@ -577,8 +568,8 @@ onMounted(() => {
 .ids-audit-page :deep(.el-input__wrapper),
 .ids-audit-page :deep(.el-select__wrapper),
 .ids-audit-page :deep(.el-range-editor.el-input__wrapper) {
-  background: rgba(6, 19, 40, 0.9);
-  box-shadow: 0 0 0 1px rgba(97, 182, 255, 0.28) inset;
+  background: #0a223f !important;
+  box-shadow: 0 0 0 1px rgba(102, 165, 237, 0.35) inset !important;
 }
 
 .ids-audit-page :deep(.el-input__inner),
@@ -586,23 +577,23 @@ onMounted(() => {
 .ids-audit-page :deep(.el-select__selected-item),
 .ids-audit-page :deep(.el-range-input),
 .ids-audit-page :deep(.el-range-separator) {
-  color: #ecf4ff;
+  color: #eaf4ff !important;
 }
 
 .ids-audit-page :deep(.el-input__inner::placeholder),
 .ids-audit-page :deep(.el-range-input::placeholder) {
-  color: #94b5da;
+  color: #99b9dd !important;
 }
 
 .ids-audit-page :deep(.el-button--default) {
-  background: rgba(8, 28, 57, 0.9);
-  border-color: rgba(112, 171, 243, 0.34);
-  color: #dbeafe;
+  background: rgba(10, 34, 66, 0.92) !important;
+  border-color: rgba(113, 175, 246, 0.35) !important;
+  color: #ddedff !important;
 }
 
 .ids-audit-page :deep(.el-button--primary) {
-  border-color: #3b82f6;
-  background: linear-gradient(180deg, #3b82f6, #2563eb);
+  background: linear-gradient(180deg, #3f8dff, #296de0) !important;
+  border-color: #3f8dff !important;
 }
 
 @media (max-width: 1360px) {
@@ -617,7 +608,7 @@ onMounted(() => {
   }
 
   .audit-hero__title {
-    font-size: 24px;
+    font-size: 26px;
   }
 
   .summary-grid {
