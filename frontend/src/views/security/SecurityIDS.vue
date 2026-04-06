@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted, watch, onBeforeUnmount } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { DeleteFilled } from '@element-plus/icons-vue'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import {
@@ -15,11 +15,8 @@ import {
   updateIDSEventStatus,
   blockIDSEventIp,
   unblockIDSEventIp,
+  getIDSEvent,
   getIDSEventReport,
-  seedIDSDemoPhase1,
-  seedIDSDemoPhase2,
-  resetIDSDemoEvents,
-  getIDSPhase1AggregateReport,
   listIDSSources,
   createIDSSource,
   updateIDSSource,
@@ -37,6 +34,7 @@ import type {
   IDSSourceListResponse,
   IDSSourcePackageIntakeItem,
   IDSSourceRegistryPayload,
+  IDSUploadTrace,
   IDSSourcePackagePreviewPayload,
   IDSSourcePackagePreviewResponse,
 } from '@/api/ids'
@@ -45,6 +43,8 @@ type SourceFormState = IDSSourceRegistryPayload
 type PackagePreviewFormState = IDSSourcePackagePreviewPayload
 type PackageActivationFormState = { package_intake_id: number; triggered_by: string; activation_note: string }
 
+const route = useRoute()
+const router = useRouter()
 const loading = ref(false)
 const trendDays = ref(7)
 const trendData = ref<{ dates: string[]; counts: number[] }>({ dates: [], counts: [] })
@@ -81,6 +81,7 @@ const packageActivationTarget = ref<{
 } | null>(null)
 const packageHistoryLoading = ref(false)
 const packageHistory = ref<IDSSourcePackageHistoryItem | null>(null)
+const packageHistorySource = ref<IDSSourceItem | null>(null)
 const latestPackagePreviewResult = ref<IDSSourcePackagePreviewResponse | null>(null)
 const sourceRows = ref<IDSSourceItem[]>([])
 const sourceSummary = ref<IDSSourceListResponse['summary']>({
@@ -92,7 +93,6 @@ const sourceSummary = ref<IDSSourceListResponse['summary']>({
 })
 const detailVisible = ref(false)
 const currentRow = ref<IDSEventItem | null>(null)
-const simulatingAttack = ref(false)
 const aiAnalyzingId = ref<number | null>(null)
 const reportVisible = ref(false)
 const reportLoading = ref(false)
@@ -111,22 +111,9 @@ const aiProcessText = ref('AI 正在初始化安全研判引擎...')
 const aiProcessStage = ref(1)
 const aiProcessTotalStages = ref(4)
 const aiProcessProgress = ref(12)
-const aiProcessMode = ref<'analysis' | 'phase1' | 'phase2'>('analysis')
+const aiProcessMode = ref<'analysis'>('analysis')
 const aiProcessFeed = ref<string[]>([])
 let aiProcessTimer: ReturnType<typeof setInterval> | null = null
-const phase1UnlockCounter = ref(0)
-const phase2UnlockCounter = ref(0)
-const phase1Unlocked = ref(false)
-const phase2Unlocked = ref(false)
-let phase1UnlockTimer: ReturnType<typeof setTimeout> | null = null
-let phase2UnlockTimer: ReturnType<typeof setTimeout> | null = null
-const clearArmed = ref(false)
-let clearArmTimer: ReturnType<typeof setTimeout> | null = null
-const timelineVisible = ref(false)
-const timelineLoading = ref(false)
-const timelineRows = ref<IDSEventItem[]>([])
-const timelineAutoStage = ref(1)
-let timelineStageTimer: ReturnType<typeof setInterval> | null = null
 
 const idsHudClock = ref('')
 let idsHudClockTimer: ReturnType<typeof setInterval> | null = null
@@ -143,6 +130,7 @@ function createSourceFormDefaults(): SourceFormState {
     operational_status: 'enabled',
     freshness_target_hours: 24,
     sync_mode: 'manual',
+    sync_endpoint: 'app/data/ids_source_sync/suricata-web-prod.manifest.json',
     provenance_note: '',
   }
 }
@@ -184,15 +172,14 @@ function buildStatsFilters() {
 }
 
 const metricsScopeLabel = computed(() => {
-  if (eventOriginFilter.value === 'demo') return '演示事件'
   if (eventOriginFilter.value === 'test') return '测试事件'
   if (!eventOriginFilter.value) return '全部事件'
   return '真实事件'
 })
 
 const metricsScopeHint = computed(() => {
-  if (eventOriginFilter.value === 'real') return '默认运营指标仅统计真实事件，演示和测试数据不会混入。'
-  if (!eventOriginFilter.value) return '当前视图包含真实、演示与测试数据，指标仅用于全量回看。'
+  if (eventOriginFilter.value === 'real') return '默认运营指标仅统计真实事件，测试数据不会混入。'
+  if (!eventOriginFilter.value) return '当前视图包含真实与测试数据，用于全量回看与对比。'
   return '当前视图不是生产运营口径，请结合来源标签解读数据。'
 })
 
@@ -372,17 +359,6 @@ async function fetchSources() {
   }
 }
 
-function parseDateTime(v: string | null | undefined): Date | null {
-  if (!v) return null
-  const dt = new Date(v.replace(' ', 'T'))
-  if (Number.isNaN(dt.getTime())) return null
-  return dt
-}
-
-function fmtNodeTime(v: string | null | undefined): string {
-  return v || '-'
-}
-
 /** 表格中单行展示时间，避免换行导致行高不齐 */
 function fmtTableDateTime(v: string | null | undefined): string {
   if (!v) return '-'
@@ -442,7 +418,7 @@ function sourceTrustClassificationLabel(value: string | null | undefined): strin
   if (value === 'external_mature') return '成熟外部规则'
   if (value === 'custom_project') return '项目自定义规则'
   if (value === 'transitional_local') return '过渡本地规则'
-  if (value === 'demo_test') return '演示 / 测试'
+  if (value === 'demo_test') return '实验室验证'
   return value?.trim() || '-'
 }
 
@@ -499,6 +475,73 @@ function sourceSyncResultLabel(value: string | null | undefined): string {
   return value?.trim() || '无记录'
 }
 
+function compactSha256(value: string | null | undefined): string {
+  const normalized = value?.trim()
+  if (!normalized) return '-'
+  if (normalized.length <= 16) return normalized
+  return `${normalized.slice(0, 8)}...${normalized.slice(-8)}`
+}
+
+function formatBytes(value: number | null | undefined): string {
+  const size = Number(value || 0)
+  if (!size) return '-'
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(2)} MB`
+}
+
+function uploadAuditVerdictLabel(trace?: IDSUploadTrace | null): string {
+  const verdict = trace?.audit?.verdict || ''
+  if (verdict === 'quarantine') return '已扣留'
+  if (verdict === 'review') return '待复核'
+  if (verdict === 'pass') return '已放行'
+  return verdict || '-'
+}
+
+function uploadAuditTagType(trace?: IDSUploadTrace | null): 'success' | 'warning' | 'danger' | 'info' {
+  const verdict = trace?.audit?.verdict || ''
+  if (verdict === 'quarantine') return 'danger'
+  if (verdict === 'review') return 'warning'
+  if (verdict === 'pass') return 'success'
+  return 'info'
+}
+
+function buildUploadTraceMarkdownSection(trace?: IDSUploadTrace | null): string[] {
+  if (!trace?.saved_as) return []
+  return [
+    '## Upload Audit Trace',
+    `- Saved As: ${trace.saved_as || '-'}`,
+    `- Original Name: ${trace.file_name || '-'}`,
+    `- Audit Verdict: ${uploadAuditVerdictLabel(trace)}`,
+    `- Audit Risk: ${trace.audit?.risk_level || '-'}`,
+    `- Audit Confidence: ${trace.audit?.confidence ?? 0}`,
+    `- Sample Size: ${formatBytes(trace.size)}`,
+    `- SHA-256: ${trace.sha256 || '-'}`,
+    `- Summary: ${trace.audit?.summary || '-'}`,
+    '',
+  ]
+}
+
+function openSandboxReportFromEvent(row?: IDSEventItem | null) {
+  const savedAs = row?.upload_trace?.saved_as?.trim()
+  if (!savedAs) {
+    ElMessage.info('当前事件没有关联的沙箱样本')
+    return
+  }
+  detailVisible.value = false
+  void router.push({
+    path: '/security/sandbox',
+    query: { saved_as: savedAs, report: '1' },
+  })
+}
+
+function appendUploadTraceMarkdown(base: string, trace?: IDSUploadTrace | null): string {
+  const lines = buildUploadTraceMarkdownSection(trace)
+  if (!lines.length) return base
+  const suffix = lines.join('\n')
+  return `${base}\n\n${suffix}`
+}
+
 function resetSourceForm() {
   Object.assign(sourceForm, createSourceFormDefaults())
   editingSourceId.value = null
@@ -507,11 +550,15 @@ function resetSourceForm() {
 function applySourceTrustDefaults(value: string) {
   if (value === 'demo_test') {
     sourceForm.sync_mode = 'not_applicable'
+    sourceForm.sync_endpoint = ''
     if (sourceForm.operational_status === 'enabled') {
       sourceForm.operational_status = 'draft'
     }
   } else if (sourceForm.sync_mode === 'not_applicable') {
     sourceForm.sync_mode = 'manual'
+    if (!sourceForm.sync_endpoint) {
+      sourceForm.sync_endpoint = 'app/data/ids_source_sync/suricata-web-prod.manifest.json'
+    }
   }
 }
 
@@ -530,9 +577,46 @@ function openSourceEditDialog(row: IDSSourceItem) {
     operational_status: row.operational_status,
     freshness_target_hours: row.freshness_target_hours,
     sync_mode: row.sync_mode,
+    sync_endpoint: row.sync_endpoint || '',
     provenance_note: row.provenance_note || '',
   })
   sourceDialogVisible.value = true
+}
+
+async function saveSourceLegacy() {
+  sourceSaving.value = true
+  try {
+    const payload: IDSSourceRegistryPayload = {
+      source_key: sourceForm.source_key.trim(),
+      display_name: sourceForm.display_name.trim(),
+      trust_classification: sourceForm.trust_classification,
+      detector_family: sourceForm.detector_family.trim(),
+      operational_status: sourceForm.operational_status,
+      freshness_target_hours: Number(sourceForm.freshness_target_hours || 0),
+      sync_mode: sourceForm.sync_mode,
+      sync_endpoint: sourceForm.sync_endpoint?.trim() || '',
+      provenance_note: sourceForm.provenance_note?.trim() || '',
+    }
+    if (editingSourceId.value) {
+      await updateIDSSource(editingSourceId.value, payload)
+      ElMessage.success('规则源已更新')
+    } else {
+      await createIDSSource(payload)
+      ElMessage.success('规则源已创建')
+    }
+    sourceDialogVisible.value = false
+    resetSourceForm()
+    /*
+    const versionSummary = data?.package_version ? ` / ${data.package_version}` : ''
+    const ruleSummary = data?.rule_count ? ` / ${data.rule_count} rules` : ''
+    ElMessage.success(`瑙勫垯婧愬悓姝?{sourceSyncResultLabel(data?.result_status)}锛?{row.display_name}${versionSummary}${ruleSummary}`)
+    */
+    await fetchSources()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '规则源保存失败')
+  } finally {
+    sourceSaving.value = false
+  }
 }
 
 async function saveSource() {
@@ -546,6 +630,7 @@ async function saveSource() {
       operational_status: sourceForm.operational_status,
       freshness_target_hours: Number(sourceForm.freshness_target_hours || 0),
       sync_mode: sourceForm.sync_mode,
+      sync_endpoint: sourceForm.sync_endpoint?.trim() || '',
       provenance_note: sourceForm.provenance_note?.trim() || '',
     }
     if (editingSourceId.value) {
@@ -565,7 +650,7 @@ async function saveSource() {
   }
 }
 
-async function runSourceSync(row: IDSSourceItem) {
+async function runSourceSyncLegacy(row: IDSSourceItem) {
   sourceSyncingId.value = row.id
   try {
     const res: any = await syncIDSSource(row.id, {
@@ -581,6 +666,27 @@ async function runSourceSync(row: IDSSourceItem) {
     sourceSyncingId.value = null
   }
 }
+
+async function runSourceSync(row: IDSSourceItem) {
+  sourceSyncingId.value = row.id
+  try {
+    const res: any = await syncIDSSource(row.id, {
+      triggered_by: 'system_admin',
+      reason: `security-center manual sync for ${row.source_key}`,
+    })
+    const data = res?.data ?? res
+    const versionSummary = data?.package_version ? ` / ${data.package_version}` : ''
+    const ruleSummary = data?.rule_count ? ` / ${data.rule_count} rules` : ''
+    ElMessage.success(`${sourceSyncResultLabel(data?.result_status)} / ${row.display_name}${versionSummary}${ruleSummary}`)
+    await fetchSources()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || e?.message || '规则源同步失败')
+  } finally {
+    sourceSyncingId.value = null
+  }
+}
+
+void [formatBytes, saveSourceLegacy, runSourceSyncLegacy]
 
 function resetPackagePreviewForm() {
   Object.assign(packagePreviewForm, createPackagePreviewFormDefaults())
@@ -681,7 +787,7 @@ function openPackageActivationDialog(row: IDSSourceItem) {
     return
   }
   if (latestIntake.trust_classification === 'demo_test') {
-    ElMessage.warning('演示 / 测试规则包不能作为受信覆盖激活')
+    ElMessage.warning('实验室验证规则包不能直接作为生产受信覆盖激活')
     return
   }
   packageActivationForm.package_intake_id = latestIntake.id
@@ -705,6 +811,7 @@ async function openPackageHistoryDialog(row: IDSSourceItem) {
   packageHistoryDialogVisible.value = true
   packageHistoryLoading.value = true
   packageHistory.value = null
+  packageHistorySource.value = row
   try {
     const res: any = await listIDSSourcePackages({ source_id: row.id, limit: 5 })
     const data = res?.data ?? res
@@ -741,95 +848,6 @@ async function submitPackageActivation() {
     if (packageActivationDialogVisible.value) {
       packageActivatingSourceId.value = null
     }
-  }
-}
-
-const timelineSummaryNodes = computed(() => {
-  const rows = [...timelineRows.value].sort((a, b) => (parseDateTime(a.created_at)?.getTime() || 0) - (parseDateTime(b.created_at)?.getTime() || 0))
-  const phase1 = rows.filter((r) => (r.action_taken || '').startsWith('demo_seed_phase1::'))
-  const phase2 = rows.filter((r) => (r.action_taken || '').startsWith('demo_seed_phase2::'))
-  const all = [...phase1, ...phase2]
-  const first = all[0]
-  const highRisk = all.filter((r) => Number(r.risk_score || 0) >= 70).length
-  const blocked = all.filter((r) => !!r.blocked).length
-  const archived = all.filter((r) => !!r.archived || r.status === 'closed').length
-  const aiDone = all.filter((r) => !!(r.ai_analysis || r.ai_risk_level)).length
-  const byAttack = new Map<string, number>()
-  all.forEach((r) => {
-    const key = r.attack_type_label || r.attack_type || '未知类型'
-    byAttack.set(key, (byAttack.get(key) || 0) + 1)
-  })
-  const attacks = [...byAttack.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, cnt]) => `${name} x${cnt}`)
-    .join('，')
-  return [
-    {
-      key: 's-1',
-      title: '请求进入',
-      detail: `${fmtNodeTime(first?.created_at)} 开始接收攻防流量，累计事件 ${all.length} 条`,
-      state: 'info' as const,
-    },
-    {
-      key: 's-2',
-      title: '命中特征',
-      detail: `涉及攻击：${attacks || '无'}；高风险 ${highRisk} 条`,
-      state: highRisk > 0 ? ('danger' as const) : ('warning' as const),
-    },
-    {
-      key: 's-3',
-      title: '响应动作',
-      detail: `已执行阻断/封禁 ${blocked} 次，形成联动处置与审计留痕`,
-      state: blocked > 0 ? ('success' as const) : ('warning' as const),
-    },
-    {
-      key: 's-4',
-      title: 'AI 结论',
-      detail: `AI 已完成 ${aiDone} 条研判，输出风险等级与处置建议`,
-      state: aiDone > 0 ? ('success' as const) : ('info' as const),
-    },
-    {
-      key: 's-5',
-      title: '归档闭环',
-      detail: `已归档 ${archived} 条，形成“检测 -> 响应 -> 研判 -> 留档”总体链路`,
-      state: archived > 0 ? ('success' as const) : ('info' as const),
-    },
-  ]
-})
-
-const timelineAttackList = computed(() => {
-  const rows = timelineRows.value.filter((r) =>
-    (r.action_taken || '').startsWith('demo_seed_phase1::') || (r.action_taken || '').startsWith('demo_seed_phase2::'),
-  )
-  const byAttack = new Map<string, number>()
-  rows.forEach((r) => {
-    const key = r.attack_type_label || r.attack_type || '未知类型'
-    byAttack.set(key, (byAttack.get(key) || 0) + 1)
-  })
-  return [...byAttack.entries()].sort((a, b) => b[1] - a[1]).map(([name, cnt]) => ({ name, cnt }))
-})
-
-async function openEvidenceTimeline() {
-  timelineVisible.value = true
-  timelineLoading.value = true
-  timelineAutoStage.value = 1
-  if (timelineStageTimer) clearInterval(timelineStageTimer)
-  timelineStageTimer = setInterval(() => {
-    timelineAutoStage.value = Math.min(5, timelineAutoStage.value + 1)
-  }, 520)
-  try {
-    const res: any = await listIDSEvents({ limit: 200, offset: 0 })
-    const data = res?.data ?? res
-    timelineRows.value = data?.items ?? []
-    await new Promise((resolve) => setTimeout(resolve, 1800))
-  } catch (e: any) {
-    timelineRows.value = []
-    ElMessage.error(e?.response?.data?.detail || e?.message || '加载证据链失败')
-  } finally {
-    if (timelineStageTimer) clearInterval(timelineStageTimer)
-    timelineStageTimer = null
-    timelineAutoStage.value = 5
-    timelineLoading.value = false
   }
 }
 
@@ -872,30 +890,42 @@ function handleSelectionChange(rows: IDSEventItem[]) {
   selectedIds.value = rows.map((r) => r.id)
 }
 
-async function handleSimulateAttack() {
-  simulatingAttack.value = true
-  try {
-    const payload = "1' OR '1'='1"
-    // /api/goods 在 IDS 白名单内，改用未白名单的公开大屏接口以便规则命中
-    const url = `/api/overview/screen?ids_demo=${encodeURIComponent(payload)}`
-    await fetch(url, { credentials: 'include' })
-  } catch {
-    /* 403 为预期，请求已被 IDS 拦截 */
-  }
-  ElMessage.success(
-    eventOriginFilter.value === 'real'
-      ? '演示请求已发送。当前默认视图只展示真实事件，如需检查演示数据请将事件范围切换到“演示事件”。'
-      : '演示请求已发送，检测记录已生成，请查看当前列表。',
-  )
-  await fetchStats()
-  await fetchTrend()
-  await fetchData()
-  simulatingAttack.value = false
-}
-
 function showDetail(row: IDSEventItem) {
   currentRow.value = row
   detailVisible.value = true
+}
+
+async function openEventById(eventId: number, opts?: { report?: boolean }) {
+  const res: any = await getIDSEvent(eventId)
+  const data = res?.data ?? res
+  const row = data?.item ?? data
+  if (!row?.id) {
+    throw new Error('IDS event not found')
+  }
+  currentRow.value = row
+  detailVisible.value = true
+  if (opts?.report) {
+    await openReport(row, true)
+  }
+}
+
+async function focusEventFromRoute() {
+  const raw = typeof route.query.event === 'string' ? route.query.event : ''
+  if (!raw) return
+
+  const eventId = Number(raw)
+  if (!Number.isFinite(eventId) || eventId <= 0) return
+
+  try {
+    await openEventById(eventId, { report: route.query.report === '1' })
+  } catch {
+    ElMessage.error('指定 IDS 事件加载失败')
+  }
+
+  const nextQuery = { ...route.query }
+  delete nextQuery.event
+  delete nextQuery.report
+  void router.replace({ path: route.path, query: nextQuery })
 }
 
 async function handleAiAnalyze(row: IDSEventItem) {
@@ -989,46 +1019,16 @@ function stopAiProcess() {
   aiProcessMode.value = 'analysis'
 }
 
-function startAiProcess(
-  a?: string,
-  b?: 'analysis' | 'phase1' | 'phase2',
-) {
-  const stagesByMode: Record<'analysis' | 'phase1' | 'phase2', string[]> = {
-    analysis: [
-      'AI 正在深度研判事件并生成报告...',
-      '正在回放命中规则并提取关键证据...',
-      '正在计算风险等级与置信度...',
-      '正在输出结构化安全报告...',
-    ],
-    phase1: [
-      '战情引擎启动：批量注入多向量攻击链样本...',
-      '规则与特征库匹配：SQL/XSS/路径/JNDI 等并发命中...',
-      '联动响应执行：评分、拦截与审计留痕...',
-      '正在生成多向量并发攻击聚合研判报告...',
-      '报告中心同步：向量明细与处置建议已固化...',
-    ],
-    phase2: [
-      '高危木马样本进入检测通道...',
-      '入口层识别恶意上传并即时阻断...',
-      '封禁策略联动执行，告警证据固化...',
-      'AI 正在进行高危事件深度研判...',
-      '报告中心生成审计级文档（PDF可导出）...',
-    ],
-  }
-  let mode: 'analysis' | 'phase1' | 'phase2' = 'analysis'
-  let customTitle: string | undefined
-  if (b) {
-    mode = b
-    customTitle = a
-  } else if (a === 'phase1' || a === 'phase2' || a === 'analysis') {
-    mode = a
-  } else {
-    customTitle = a
-  }
-  const stages = stagesByMode[mode]
-  const initialTitle = customTitle?.trim() ? customTitle : stages[0]
+function startAiProcess(title?: string) {
+  const stages = [
+    'AI 正在深度研判事件并生成报告...',
+    '正在回放命中规则并提取关键证据...',
+    '正在计算风险等级与置信度...',
+    '正在输出结构化安全报告...',
+  ]
+  const initialTitle = title?.trim() ? title : stages[0]
   if (aiProcessTimer) clearInterval(aiProcessTimer)
-  aiProcessMode.value = mode
+  aiProcessMode.value = 'analysis'
   aiProcessText.value = initialTitle
   aiProcessVisible.value = true
   aiProcessStage.value = 1
@@ -1048,7 +1048,7 @@ function startAiProcess(
     aiProcessText.value = stages[idx]
     aiProcessProgress.value = Math.min(100, 12 + Math.round(((idx + 1) / stages.length) * 88))
     aiProcessFeed.value = [...aiProcessFeed.value.slice(-4), stages[idx]]
-  }, mode === 'analysis' ? 900 : 720)
+  }, 900)
 }
 
 async function exportReport(format: 'md' | 'html' | 'pdf') {
@@ -1116,72 +1116,6 @@ async function exportReport(format: 'md' | 'html' | 'pdf') {
 
 function buildProfessionalMarkdown(data: any, eventId: number): string {
   const r = data?.report || {}
-  if (r.kind === 'aggregate_phase1') {
-    const o = r?.overview || {}
-    const reportNo = `SCSP-IDS-AGM-${String(eventId).padStart(6, '0')}`
-    const generatedAt = r?.generated_at || new Date().toISOString().slice(0, 19).replace('T', ' ')
-    const vectors = r?.vectors || []
-    const labels = (r?.attack_type_labels || []).join('、')
-    reportMeta.value = {
-      reportNo,
-      generatedAt,
-      title: '校园物资供应链安全监测平台',
-      headerSuffix: '多向量并发攻击研判报告',
-    }
-    const lines = [
-      `# ${reportMeta.value.title}`,
-      '',
-      '## 多向量并发攻击 · 安全研判报告',
-      '',
-      `- 报告编号：${reportNo}`,
-      `- 生成时间：${generatedAt}`,
-      `- 聚合事件数：${r.event_count ?? vectors.length}`,
-      `- 攻击类型覆盖：${labels || '-'}`,
-      '',
-      '## 一、总体概览',
-      `- 监测窗口：${o.time || '-'}`,
-      `- 来源 IP 分布：${o.client_ip || '-'}`,
-      `- 事件性质：${o.attack_type_label || '多向量并发攻击'}`,
-      `- 请求特征：${o.method || '-'}；暴露接口：${o.path || '-'}`,
-      '',
-      '## 二、综合风险评估',
-      `- 峰值规则风险分：${r.score?.risk_score ?? '-'} / 100`,
-      `- 规则置信度上限：${r.score?.rule_confidence ?? '-'} / 100`,
-      `- 命中次数合计：${r.score?.hit_count ?? '-'}`,
-      `- AI 风险等级：${r.score?.ai_risk_level || 'high'}`,
-      '',
-      '## 三、攻击向量明细',
-      ...vectors.map(
-        (v: any, i: number) =>
-          `${i + 1}. [${v.attack_type_label || v.attack_type}] ${v.method} ${v.path} ← ${v.client_ip}（风险 ${v.risk_score}，${v.blocked ? '已阻断' : '仅记录'}）`,
-      ),
-      '',
-      '## 四、关键证据摘要',
-      `- 聚合签名：${r.evidence?.signature || '-'}`,
-      `- 特征摘要：${r.evidence?.query_snippet || '-'}`,
-      `- User-Agent：${r.evidence?.user_agent || '-'}`,
-      '',
-      '## 五、处置与建议',
-      `- 封禁策略：${r.response?.blocked ? '已对部分来源执行阻断' : '以记录与复核为主'}`,
-      `- 规则引用：${r.response?.firewall_rule || '-'}`,
-      '',
-      '## 六、AI 研判结论',
-      r.ai_analysis || '暂无',
-      '',
-      ...(r.analysis_json
-        ? [
-            '## 七、结构化研判 JSON（IDS + AI）',
-            '```json',
-            JSON.stringify(r.analysis_json, null, 2),
-            '```',
-          ]
-        : []),
-      '',
-      '---',
-      '本报告由 校园物资供应链安全监测平台 自动生成，仅供安全运营与审计留档使用。',
-    ]
-    return lines.join('\n')
-  }
   const o = r?.overview || {}
   const s = r?.score || {}
   const e = r?.evidence || {}
@@ -1216,10 +1150,9 @@ function buildProfessionalMarkdown(data: any, eventId: number): string {
     '',
     '## 二、风险评估',
     `- 规则风险分：${s.risk_score ?? '-'} / 100`,
-    `- 规则置信度：${s.rule_confidence ?? '-'} / 100`,
-    `- 命中次数：${s.hit_count ?? '-'}`,
+    `- 规则置信度：${fmtConfidencePct(s.rule_confidence)}`,
     `- AI风险等级：${s.ai_risk_level || 'unknown'}`,
-    `- AI置信度：${s.ai_confidence ?? 0}`,
+    `- AI置信度：${fmtConfidencePct(s.ai_confidence)}`,
     '',
     '## 三、关键证据',
     `- 规则签名：${e.signature || '-'}`,
@@ -1253,35 +1186,15 @@ async function openReport(
     const res: any = await getIDSEventReport(row.id, forceAI)
     const data = res?.data ?? res
     reportData.value = data?.report || null
-    reportMarkdown.value = buildProfessionalMarkdown(data, row.id)
+    reportMarkdown.value = appendUploadTraceMarkdown(
+      buildProfessionalMarkdown(data, row.id),
+      data?.report?.upload_trace,
+    )
     reportVisible.value = true
   } catch (e: any) {
     reportData.value = null
     reportMarkdown.value = ''
     ElMessage.error(e?.response?.data?.detail || e?.message || '生成报告失败')
-  } finally {
-    reportLoading.value = false
-    stopAiProcess()
-  }
-}
-
-/** 主标题彩蛋：多向量并发聚合报告（数据就绪后再打开弹窗，避免白屏闪烁） */
-async function openPhase1AggregateReport(opts?: { skipProcessOverlay?: boolean }) {
-  if (!opts?.skipProcessOverlay) startAiProcess('phase1')
-  reportLoading.value = true
-  try {
-    const res: any = await getIDSPhase1AggregateReport()
-    const data = res?.data ?? res
-    const rep = data?.report
-    reportData.value = rep || null
-    const firstId = rep?.event_id ?? 0
-    reportOrderNo.value = `AGM-${firstId}`
-    reportMarkdown.value = buildProfessionalMarkdown(data, firstId)
-    reportVisible.value = true
-  } catch (e: any) {
-    reportData.value = null
-    reportMarkdown.value = ''
-    ElMessage.error(e?.response?.data?.detail || e?.message || '聚合报告生成失败')
   } finally {
     reportLoading.value = false
     stopAiProcess()
@@ -1314,9 +1227,6 @@ function riskLevelLabel(level: string | undefined) {
 }
 
 function reportConclusionText() {
-  if (reportData.value?.kind === 'aggregate_phase1') {
-    return '已识别多向量并发攻击并完成聚合研判，建议按来源 IP 与暴露接口维度持续封禁、限速与复核。'
-  }
   const blocked = !!reportData.value?.response?.blocked
   const level = (reportData.value?.score?.ai_risk_level || '').toLowerCase()
   if (blocked && level === 'high') return '已拦截并完成高危处置，建议继续监控同源流量。'
@@ -1326,7 +1236,6 @@ function reportConclusionText() {
 }
 
 function reportCoverSubtitle() {
-  if (reportData.value?.kind === 'aggregate_phase1') return '多向量并发攻击 · 研判摘要'
   if ((reportData.value?.overview?.attack_type || '') === 'malware') return '木马 / WebShell 安全事件分析报告'
   return '网络安全事件分析报告'
 }
@@ -1341,117 +1250,18 @@ function reportFingerprint() {
   return `EVT-${(h >>> 0).toString(16).toUpperCase().padStart(8, '0')}`
 }
 
-function handlePhase1SecretTap() {
-  phase1UnlockCounter.value += 1
-  if (phase1UnlockTimer) clearTimeout(phase1UnlockTimer)
-  phase1UnlockTimer = setTimeout(() => {
-    phase1UnlockCounter.value = 0
-  }, 2500)
-  if (phase1UnlockCounter.value >= 5) {
-    phase1Unlocked.value = true
-    phase1UnlockCounter.value = 0
-    triggerDemoPhase1()
-  }
-}
-
-function handlePhase2SecretTap() {
-  phase2UnlockCounter.value += 1
-  if (phase2UnlockTimer) clearTimeout(phase2UnlockTimer)
-  phase2UnlockTimer = setTimeout(() => {
-    phase2UnlockCounter.value = 0
-  }, 2500)
-  if (phase2UnlockCounter.value >= 5) {
-    phase2Unlocked.value = true
-    phase2UnlockCounter.value = 0
-    triggerDemoPhase2()
-  }
-}
-
-async function triggerDemoPhase1() {
-  try {
-    startAiProcess('phase1')
-    const res: any = await seedIDSDemoPhase1(true)
-    const data = res?.data ?? res
-    const ids: number[] = data?.event_ids || []
-    await fetchData()
-    await fetchStats()
-    await fetchTrend()
-    if (ids.length > 0) {
-      await openPhase1AggregateReport({ skipProcessOverlay: true })
-    }
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '多向量演示数据注入失败')
-  } finally {
-    stopAiProcess()
-  }
-}
-
-async function triggerDemoPhase2() {
-  try {
-    startAiProcess('phase2')
-    const res: any = await seedIDSDemoPhase2(true)
-    const data = res?.data ?? res
-    const eventId = data?.event_id
-    await fetchData()
-    await fetchStats()
-    await fetchTrend()
-    const row = tableData.value.find((x) => x.id === eventId) || tableData.value[0]
-    if (row) {
-      currentRow.value = row
-      detailVisible.value = true
-      await openReport(row, true, { skipProcessOverlay: true })
-    }
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '木马演示数据注入失败')
-  } finally {
-    stopAiProcess()
-  }
-}
-
-async function clearDemoData() {
-  if (!clearArmed.value) {
-    clearArmed.value = true
-    if (clearArmTimer) clearTimeout(clearArmTimer)
-    clearArmTimer = setTimeout(() => {
-      clearArmed.value = false
-    }, 3000)
-    ElMessage.warning('再次点击“清理演示数据”以确认')
-    return
-  }
-  try {
-    const res: any = await resetIDSDemoEvents()
-    const data = res?.data ?? res
-    ElMessage.success(data?.message || '演示数据已清理')
-    await fetchData()
-    await fetchStats()
-    await fetchTrend()
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || e?.message || '清理失败')
-  } finally {
-    clearArmed.value = false
-    if (clearArmTimer) clearTimeout(clearArmTimer)
-    clearArmTimer = null
-  }
-}
-
-onMounted(() => {
+onMounted(async () => {
   tickIdsHudClock()
   idsHudClockTimer = setInterval(tickIdsHudClock, 1000)
   refreshIdsTableMaxHeight()
-  fetchSources()
-  fetchStats()
-  fetchTrend()
-  fetchData()
   window.addEventListener('resize', handleResize)
+  await Promise.all([fetchSources(), fetchStats(), fetchTrend(), fetchData()])
+  await focusEventFromRoute()
 })
 onBeforeUnmount(() => {
   if (idsHudClockTimer) clearInterval(idsHudClockTimer)
   idsHudClockTimer = null
   stopAiProcess()
-  if (phase1UnlockTimer) clearTimeout(phase1UnlockTimer)
-  if (phase2UnlockTimer) clearTimeout(phase2UnlockTimer)
-  if (clearArmTimer) clearTimeout(clearArmTimer)
-  if (timelineStageTimer) clearInterval(timelineStageTimer)
   window.removeEventListener('resize', handleResize)
   pieChartInstance?.dispose()
   trendChartInstance?.dispose()
@@ -1464,6 +1274,14 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
   fetchTrend()
   fetchData()
 })
+watch(
+  () => route.query.event,
+  async () => {
+    if (route.query.event) {
+      await focusEventFromRoute()
+    }
+  },
+)
 </script>
 
 <template>
@@ -1479,8 +1297,8 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
         </span>
         <span class="sec-hud-rail__cursor">_</span>
       </div>
-      <h1 class="sec-title" @click="handlePhase1SecretTap">IDS 入侵检测</h1>
-      <div class="sec-hud-pipeline" role="button" tabindex="0" @click="handlePhase2SecretTap" @keydown.enter.prevent="handlePhase2SecretTap">
+      <h1 class="sec-title">IDS 入侵检测</h1>
+      <div class="sec-hud-pipeline">
         <span class="sec-hud-pipeline__step">抓包解析</span>
         <span class="sec-hud-pipeline__sep">·</span>
         <span class="sec-hud-pipeline__step">特征匹配（含 Body 抽样）</span>
@@ -1493,7 +1311,6 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
         <span class="sec-hud-pipeline__sep">·</span>
         <span class="sec-hud-pipeline__step">归档管理</span>
       </div>
-      <div v-if="phase1Unlocked || phase2Unlocked" class="demo-secret-actions" />
     </header>
 
     <main class="sec-main">
@@ -1556,7 +1373,7 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
           <div>
             <div class="chart-title">受信规则源运营</div>
             <div class="source-ops-card__subtitle">
-              聚焦规则源健康度、演示数据隔离和同步留痕，让规则包变更能被看见、被追溯。
+              聚焦规则源健康度、同步留痕和运行态覆盖，让规则包变更能被看见、被追溯。
             </div>
           </div>
           <div class="source-ops-card__actions">
@@ -1582,10 +1399,6 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
             <span class="source-summary-tile__value">{{ sourceSummary.trusted_count }}</span>
             <span class="source-summary-tile__label">受信生产规则</span>
           </div>
-          <div class="source-summary-tile source-summary-tile--demo">
-            <span class="source-summary-tile__value">{{ sourceSummary.demo_test_count }}</span>
-            <span class="source-summary-tile__label">演示 / 测试</span>
-          </div>
         </div>
 
         <el-table :data="sourceRows" v-loading="sourceLoading" class="sec-table source-ops-table" style="width: 100%">
@@ -1594,6 +1407,9 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
               <div class="cell-stack">
                 <span class="cell-ellipsis">{{ row.display_name }}</span>
                 <span class="cell-sub cell-mono">{{ row.source_key }}</span>
+                <span v-if="row.sync_endpoint" class="cell-sub cell-mono" :title="row.sync_endpoint">
+                  {{ row.sync_endpoint }}
+                </span>
                 <span v-if="row.active_package_version" class="cell-sub">
                   当前激活包：{{ row.active_package_version }}
                 </span>
@@ -1637,6 +1453,9 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
                   </el-tag>
                   <span class="cell-sub">{{ fmtTableDateTime(row.last_synced_at || row.latest_sync_attempt?.started_at) }}</span>
                 </div>
+                <span v-if="row.latest_sync_attempt?.package_version || row.latest_sync_attempt?.resolved_sync_endpoint" class="cell-sub">
+                  {{ row.latest_sync_attempt?.package_version || 'pending-package' }} / {{ row.latest_sync_attempt?.resolved_sync_endpoint || row.sync_endpoint || '-' }}
+                </span>
                 <span class="cell-sub" :title="row.latest_sync_attempt?.detail || row.last_sync_detail || '-'">
                   {{ row.latest_sync_attempt?.detail || row.last_sync_detail || '等待首次同步' }}
                 </span>
@@ -1667,10 +1486,16 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
                   {{ row.latest_package_preview?.visible_warning || '暂无新的规则包预览告警' }}
                 </span>
                 <span
+                  v-if="row.recent_package_intakes?.[0]?.artifact_sha256 || row.recent_package_intakes?.[0]?.rule_count"
+                  class="cell-sub"
+                >
+                  rules={{ row.recent_package_intakes?.[0]?.rule_count || 0 }} / {{ compactSha256(row.recent_package_intakes?.[0]?.artifact_sha256) }}
+                </span>
+                <span
                   v-if="row.recent_package_intakes?.[0]?.trust_classification === 'demo_test'"
                   class="cell-sub"
                 >
-                  演示 / 测试规则包仅保留可见记录，不允许作为受信覆盖激活。
+                  实验室验证规则包仅保留留痕记录，不允许直接作为受信覆盖激活。
                 </span>
               </div>
             </template>
@@ -1693,7 +1518,12 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
                   {{ packageActivating && packageActivatingSourceId === row.id ? '激活中...' : '激活' }}
                 </button>
                 <span class="ids-ops__sep" aria-hidden="true">|</span>
-                <button type="button" class="ids-act" :disabled="sourceSyncingId === row.id" @click="runSourceSync(row)">
+                <button
+                  type="button"
+                  class="ids-act"
+                  :disabled="sourceSyncingId === row.id || (!row.sync_endpoint && row.sync_mode !== 'not_applicable')"
+                  @click="runSourceSync(row)"
+                >
                   {{ sourceSyncingId === row.id ? '同步中...' : '执行同步' }}
                 </button>
               </div>
@@ -1706,7 +1536,6 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
         <el-input v-model="clientIpFilter" placeholder="来源 IP" clearable class="sec-input" />
         <el-select v-model="eventOriginFilter" placeholder="事件范围" clearable class="sec-select">
           <el-option label="真实事件" value="real" />
-          <el-option label="演示事件" value="demo" />
           <el-option label="测试事件" value="test" />
           <el-option label="全部事件" value="" />
         </el-select>
@@ -1750,10 +1579,6 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
         <el-button type="success" :disabled="!selectedIds.length" @click="handleBatchArchive">
           批量归档 ({{ selectedIds.length }})
         </el-button>
-        <el-button type="warning" :loading="simulatingAttack" @click="handleSimulateAttack">
-          演示注入（不计入真实指标）
-        </el-button>
-        <el-button type="info" @click="openEvidenceTimeline">证据链时间轴</el-button>
       </div>
 
       <div class="table-card sec-card ids-table-shell">
@@ -1906,17 +1731,6 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
           class="sec-pagination"
           @current-change="(p: number) => { pageOffset = (p - 1) * pageSize; fetchData() }"
         />
-        <div class="demo-clear-area">
-          <el-button
-            class="demo-clear-logo"
-            :class="{ armed: clearArmed }"
-            type="danger"
-            circle
-            :icon="DeleteFilled"
-            :title="clearArmed ? '再次点击确认清理' : '清理演示数据'"
-            @click="clearDemoData"
-          />
-        </div>
       </div>
     </main>
 
@@ -1938,7 +1752,6 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
             <el-option label="成熟外部规则" value="external_mature" />
             <el-option label="项目自定义规则" value="custom_project" />
             <el-option label="过渡本地规则" value="transitional_local" />
-            <el-option label="演示 / 测试" value="demo_test" />
           </el-select>
         </el-form-item>
         <el-form-item label="检测家族">
@@ -2008,7 +1821,6 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
             <el-option label="成熟外部规则" value="external_mature" />
             <el-option label="项目自定义规则" value="custom_project" />
             <el-option label="过渡本地规则" value="transitional_local" />
-            <el-option label="演示 / 测试" value="demo_test" />
           </el-select>
         </el-form-item>
         <el-form-item label="检测家族">
@@ -2038,7 +1850,14 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
           </el-select>
         </el-form-item>
         <el-form-item label="来源说明">
-          <el-input v-model="sourceForm.provenance_note" type="textarea" :rows="4" placeholder="说明该规则源为何可信，或为何仅作为演示 / 测试保留。" />
+          <el-input v-model="sourceForm.provenance_note" type="textarea" :rows="4" placeholder="说明该规则源为何可信，以及如何进入运行态覆盖。" />
+        </el-form-item>
+        <el-form-item label="Sync Endpoint">
+          <el-input
+            v-model="sourceForm.sync_endpoint"
+            :disabled="sourceForm.sync_mode === 'not_applicable'"
+            placeholder="app/data/ids_source_sync/suricata-web-prod.manifest.json"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -2146,6 +1965,39 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
 
           <div class="detail-section">
             <div class="detail-section__title">近期规则包接入记录</div>
+            <div class="detail-section" v-if="packageHistorySource">
+              <div class="detail-section__title">Sync Audit</div>
+              <el-table :data="packageHistorySource.recent_sync_attempts || []" size="small" style="width: 100%">
+                <el-table-column label="Result" width="132">
+                  <template #default="{ row }">
+                    <div class="cell-stack">
+                      <el-tag size="small" :type="sourceSyncResultTagType(row.result_status)">
+                        {{ sourceSyncResultLabel(row.result_status) }}
+                      </el-tag>
+                      <span class="cell-sub">{{ fmtTableDateTime(row.started_at) }}</span>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Package" min-width="168">
+                  <template #default="{ row }">
+                    <div class="cell-stack">
+                      <span class="cell-mono">{{ row.package_version || '-' }}</span>
+                      <span class="cell-sub cell-mono">{{ row.resolved_sync_endpoint || packageHistorySource?.sync_endpoint || '-' }}</span>
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Operator" width="128">
+                  <template #default="{ row }">
+                    <span>{{ row.triggered_by || '-' }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="Detail" min-width="260">
+                  <template #default="{ row }">
+                    <span class="cell-sub">{{ row.detail || '-' }}</span>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
             <el-table :data="packageHistory.recent_intakes" size="small" style="width: 100%">
               <el-table-column label="版本" min-width="128">
                 <template #default="{ row }">
@@ -2287,6 +2139,60 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
             </div>
           </div>
         </div>
+        <div v-if="currentRow.upload_trace" class="detail-section">
+          <div class="detail-section__title">Upload Audit Trace</div>
+          <div class="detail-tags">
+            <el-tag size="small" :type="uploadAuditTagType(currentRow.upload_trace)">
+              {{ uploadAuditVerdictLabel(currentRow.upload_trace) }}
+            </el-tag>
+            <el-tag size="small" type="warning">
+              {{ currentRow.upload_trace.audit?.risk_level || '-' }}
+            </el-tag>
+            <el-tag size="small" type="info">
+              {{ formatBytes(currentRow.upload_trace.size) }}
+            </el-tag>
+          </div>
+          <div class="detail-grid">
+            <div class="detail-item">
+              <span class="detail-label">Saved As</span>
+              <span class="detail-value detail-value--mono">{{ currentRow.upload_trace.saved_as || '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">Original Name</span>
+              <span class="detail-value">{{ currentRow.upload_trace.file_name || '-' }}</span>
+            </div>
+            <div class="detail-item detail-item--full">
+              <span class="detail-label">SHA-256</span>
+              <span class="detail-value detail-value--mono">{{ currentRow.upload_trace.sha256 || '-' }}</span>
+            </div>
+            <div class="detail-item detail-item--full">
+              <span class="detail-label">Audit Summary</span>
+              <span class="detail-value">{{ currentRow.upload_trace.audit?.summary || '-' }}</span>
+            </div>
+            <div
+              v-if="currentRow.upload_trace.indicators?.length"
+              class="detail-item detail-item--full"
+            >
+              <span class="detail-label">Indicators</span>
+              <div class="detail-tags">
+                <el-tag
+                  v-for="indicator in currentRow.upload_trace.indicators"
+                  :key="`${currentRow.id}-${indicator.code}-${indicator.detail}`"
+                  size="small"
+                  type="danger"
+                  effect="plain"
+                >
+                  {{ indicator.code }}
+                </el-tag>
+              </div>
+            </div>
+          </div>
+          <div class="detail-actions">
+            <el-button size="small" type="warning" @click="openSandboxReportFromEvent(currentRow)">
+              打开沙箱报告
+            </el-button>
+          </div>
+        </div>
         <div class="ai-block">
           <p class="ai-head">
             <strong>AI 研判</strong>
@@ -2305,41 +2211,6 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
         </div>
       </template>
     </el-drawer>
-
-    <el-dialog
-      v-model="timelineVisible"
-      title="证据链时间轴"
-      width="980px"
-      class="timeline-modal"
-      modal-class="timeline-modal-overlay"
-    >
-      <div v-loading="timelineLoading" class="timeline-container">
-        <div v-if="timelineLoading" class="timeline-loading-note">
-          正在汇总总体攻防链路... 阶段 {{ timelineAutoStage }} / 5
-        </div>
-        <div v-if="!timelineLoading && !timelineSummaryNodes.length" class="timeline-empty">暂无可展示的总体链路</div>
-        <div v-if="!timelineLoading && timelineSummaryNodes.length" class="chain-card">
-          <div class="chain-head">
-            <span class="chain-title">总体攻防闭环链路（全部攻击）</span>
-            <span class="chain-meta">自动汇总</span>
-          </div>
-          <div class="chain-attack-list">
-            <el-tag v-for="a in timelineAttackList" :key="a.name" size="small" type="danger" effect="plain">
-              {{ a.name }} x{{ a.cnt }}
-            </el-tag>
-          </div>
-          <div class="chain-nodes">
-            <div v-for="node in timelineSummaryNodes" :key="node.key" class="chain-node">
-              <span class="chain-dot" :class="`state-${node.state}`" />
-              <div class="chain-body">
-                <div class="chain-node-title">{{ node.title }}</div>
-                <div class="chain-node-detail">{{ node.detail }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </el-dialog>
 
     <el-dialog
       v-model="reportVisible"
@@ -2371,42 +2242,12 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
           <div class="report-kv">
             <span>报告编号：{{ reportMeta.reportNo || '-' }}</span>
             <span>生成时间：{{ reportMeta.generatedAt || '-' }}</span>
-            <span v-if="reportData?.kind === 'aggregate_phase1'">聚合事件数：{{ reportData?.event_count ?? '-' }}</span>
-            <span v-else>事件ID：{{ reportData?.event_id || '-' }}</span>
+            <span>事件ID：{{ reportData?.event_id || '-' }}</span>
             <span>风险分：{{ reportData?.score?.risk_score ?? '-' }} / 100</span>
           </div>
           <div class="report-conclusion">
             <strong>处置结论：</strong>{{ reportConclusionText() }}
           </div>
-        </div>
-        <div v-if="reportData?.kind === 'aggregate_phase1' && reportData?.analysis_json" class="report-json-block">
-          <div class="report-vector-head">AI 研判结构化 JSON</div>
-          <pre class="report-json-pre">{{ JSON.stringify(reportData.analysis_json, null, 2) }}</pre>
-        </div>
-        <div v-if="reportData?.kind === 'aggregate_phase1' && reportData?.vectors?.length" class="report-vector-table">
-          <div class="report-vector-head">攻击向量明细（并发）</div>
-          <table class="report-vec-tbl">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>类型</th>
-                <th>来源 IP</th>
-                <th>请求</th>
-                <th>风险</th>
-                <th>状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(v, idx) in reportData.vectors" :key="idx">
-                <td>{{ Number(idx) + 1 }}</td>
-                <td>{{ v.attack_type_label }}</td>
-                <td>{{ v.client_ip }}</td>
-                <td class="report-vec-path">{{ v.method }} {{ v.path }}</td>
-                <td>{{ v.risk_score }}</td>
-                <td>{{ v.blocked ? '已阻断' : '仅记录' }}</td>
-              </tr>
-            </tbody>
-          </table>
         </div>
         <div v-if="reportData" class="report-grid">
           <div class="report-card">
@@ -2456,7 +2297,7 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
           <div class="core-dot" />
         </div>
         <div class="ai-process-title">
-          {{ aiProcessMode === 'phase2' ? '木马/WebShell 拦截与处置引擎运行中' : (aiProcessMode === 'phase1' ? '多向量并发攻击链研判引擎运行中' : 'AI 研判引擎运行中') }}
+          AI 研判引擎运行中
         </div>
         <div class="ai-process-stage">阶段 {{ aiProcessStage }} / {{ aiProcessTotalStages }}</div>
         <div class="ai-process-progress">
@@ -2624,18 +2465,6 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
   font-size: 18px;
   user-select: none;
   padding: 0 0.08em;
-}
-.demo-secret-actions {
-  margin-top: 12px;
-  display: inline-flex;
-  align-items: center;
-}
-.demo-secret-hint {
-  font-size: 12px;
-  color: rgba(148, 163, 184, 0.9);
-  border: 1px dashed rgba(148, 163, 184, 0.45);
-  border-radius: 10px;
-  padding: 4px 10px;
 }
 .sec-main { padding: 0; }
 
@@ -3029,6 +2858,12 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
 .detail-value--mono {
   font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
   font-variant-numeric: tabular-nums;
+}
+
+.detail-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 :deep(
@@ -3735,7 +3570,7 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
 </style>
 
 <style lang="scss">
-/* Teleport 到 body 的 Dialog 兜底样式（非 scoped） */
+/* Teleport 到 body 的 Dialog 全局样式（非 scoped） */
 .el-dialog.ai-process-modal,
 .ai-process-modal .el-dialog {
   background: radial-gradient(circle at 50% 35%, rgba(30, 64, 175, 0.26), rgba(2, 6, 23, 0.98)) !important;

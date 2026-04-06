@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import json
 import threading
@@ -31,9 +32,11 @@ def _attack_label(t: str) -> str:
 
 
 def is_llm_available() -> bool:
+    if str(os.environ.get("IDS_FORCE_STATIC_MODE", "")).strip() == "1":
+        return False
     if settings.LLM_PROVIDER == "ollama":
         return bool(settings.LLM_BASE_URL and settings.LLM_BASE_URL.strip())
-    if settings.LLM_PROVIDER in ("openai", "deepseek"):
+    if settings.LLM_PROVIDER in ("openai", "deepseek", "kimi"):
         return bool(settings.LLM_API_KEY and str(settings.LLM_API_KEY).strip())
     return bool(settings.LLM_BASE_URL and str(settings.LLM_BASE_URL).strip())
 

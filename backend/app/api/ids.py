@@ -1,8 +1,13 @@
-"""IDS management API for review, reporting, and demo workflows."""
+"""IDS management API for review, reporting, and security-center workflows."""
 from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+import hashlib
+import json
+import logging
+import re
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -12,11 +17,14 @@ from sqlalchemy.orm import Session
 from ..api.deps import require_roles
 from ..config import settings
 from ..database import get_db
+from ..models.audit_log import AuditLog
 from ..models.ids_event import IDSEvent
 from ..models.ids_source import IDSSource, IDSSourceSyncAttempt
 from ..models.ids_source_package import IDSSourcePackageActivation, IDSSourcePackageIntake
+from ..models.user import User
+from ..services.audit import write_audit_log
 from ..services.ids_ai_analysis import is_llm_available, run_ai_analysis_sync
-from ..services.ids_engine import block_ip_windows, unblock_ip_windows
+from ..services.ids_engine import block_ip_windows, refresh_runtime_rule_cache, unblock_ip_windows
 from ..services.ids_ingestion import (
     DEMO_EVENT_ORIGIN,
     REAL_EVENT_ORIGIN,
@@ -62,9 +70,28 @@ from ..services.ids_source_packages import (
     list_recent_package_activations,
     list_recent_package_intakes,
 )
+from ..services.ids_source_sync import SourceSyncValidationError, load_source_sync_payload
 
 router = APIRouter(prefix="/ids", tags=["ids"])
 _admin = require_roles("system_admin")
+logger = logging.getLogger("ids")
+_SITUATION_SERVICE_STARTED_AT = datetime.utcnow()
+_TARGET_LOCATION = {"lat": 43.817, "lng": 125.3235, "city": "长春", "country": "中国", "ip": "202.198.16.1"}
+_SITUATION_GEO_POINTS = [
+    {"country": "美国", "city": "纽约", "lat": 40.7128, "lng": -74.0060},
+    {"country": "美国", "city": "洛杉矶", "lat": 34.0522, "lng": -118.2437},
+    {"country": "俄罗斯", "city": "莫斯科", "lat": 55.7558, "lng": 37.6173},
+    {"country": "德国", "city": "柏林", "lat": 52.5200, "lng": 13.4050},
+    {"country": "法国", "city": "巴黎", "lat": 48.8566, "lng": 2.3522},
+    {"country": "英国", "city": "伦敦", "lat": 51.5074, "lng": -0.1278},
+    {"country": "日本", "city": "东京", "lat": 35.6762, "lng": 139.6503},
+    {"country": "韩国", "city": "首尔", "lat": 37.5665, "lng": 126.9780},
+    {"country": "新加坡", "city": "新加坡", "lat": 1.3521, "lng": 103.8198},
+    {"country": "澳大利亚", "city": "悉尼", "lat": -33.8688, "lng": 151.2093},
+    {"country": "巴西", "city": "圣保罗", "lat": -23.5505, "lng": -46.6333},
+    {"country": "加拿大", "city": "多伦多", "lat": 43.6532, "lng": -79.3832},
+    {"country": "印度", "city": "新德里", "lat": 28.6139, "lng": 77.2090},
+]
 
 
 class ArchiveBatchRequest(BaseModel):
@@ -118,6 +145,7 @@ class SourceRegistryRequest(BaseModel):
     operational_status: str = "enabled"
     freshness_target_hours: int = Field(..., ge=1, le=720)
     sync_mode: str = "manual"
+    sync_endpoint: str = ""
     provenance_note: str = ""
 
 
@@ -140,6 +168,97 @@ class SourcePackageActivationRequest(BaseModel):
     package_intake_id: int
     triggered_by: str
     activation_note: str = ""
+
+
+_IDS_AUDIT_SEVERITY = {
+    "ids_upload_release": "informational",
+    "ids_upload_quarantine": "critical",
+    "ids_upload_rejected": "critical",
+    "ids_sandbox_analyze": "suspicious",
+    "ids_sandbox_delete": "critical",
+    "ids_source_create": "informational",
+    "ids_source_update": "suspicious",
+    "ids_source_sync": "suspicious",
+    "ids_package_preview": "informational",
+    "ids_package_activate": "critical",
+    "ids_event_archive": "informational",
+    "ids_event_archive_batch": "informational",
+    "ids_event_ai_analyze": "suspicious",
+    "ids_event_status_update": "suspicious",
+    "ids_event_block": "critical",
+    "ids_event_unblock": "critical",
+}
+
+
+def _ids_audit_user_name(user: User) -> str:
+    return (user.real_name or user.username or "system_admin").strip()[:64]
+
+
+def _log_ids_audit(
+    db: Session,
+    *,
+    user: User,
+    action: str,
+    target_type: str,
+    target_id: str,
+    detail: str,
+) -> None:
+    write_audit_log(
+        db,
+        user_id=user.id,
+        user_name=_ids_audit_user_name(user),
+        user_role=(user.role or "").strip()[:64],
+        action=action,
+        target_type=target_type,
+        target_id=str(target_id or ""),
+        detail=detail,
+    )
+
+
+def _serialize_ids_audit_log(row: AuditLog) -> dict[str, Any]:
+    severity = _IDS_AUDIT_SEVERITY.get(row.action or "", "informational")
+    return {
+        "id": row.id,
+        "user_name": row.user_name or "",
+        "user_role": row.user_role or "",
+        "action": row.action or "",
+        "target_type": row.target_type or "",
+        "target_id": row.target_id or "",
+        "detail": row.detail or "",
+        "severity": severity,
+        "metadata": None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+@router.get("/situation")
+def ids_situation(
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    q = _filtered_ids_query(db, event_origin=REAL_EVENT_ORIGIN)
+    total_blocked = q.filter(IDSEvent.blocked == 1).count()
+    active_threats = (
+        q.filter(IDSEvent.archived == 0)
+        .filter(IDSEvent.status.in_(["new", "investigating"]))
+        .count()
+    )
+    online_sources = db.query(IDSSource).count()
+    rows = q.order_by(IDSEvent.created_at.desc()).limit(30).all()
+    attacks = [_serialize_situation_attack(row) for row in rows]
+    return {
+        "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "scope": REAL_EVENT_ORIGIN,
+        "disclaimer": "地图位置由真实事件 IP 做稳定映射推导，仅用于态势可视化，不代表精确地理定位。",
+        "target": _TARGET_LOCATION,
+        "metrics": {
+            "total_blocked": total_blocked,
+            "active_threats": active_threats,
+            "uptime_seconds": int((datetime.utcnow() - _SITUATION_SERVICE_STARTED_AT).total_seconds()),
+            "online_sources": online_sources,
+        },
+        "attacks": attacks,
+    }
 
 
 @router.get("/events")
@@ -172,6 +291,18 @@ def list_ids_events(
     total = q.count()
     rows = q.offset(offset).limit(limit).all()
     return {"total": total, "items": [_serialize_ids_event(row) for row in rows]}
+
+
+@router.get("/events/{event_id}")
+def get_ids_event(
+    event_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(_admin),
+):
+    row = db.query(IDSEvent).filter(IDSEvent.id == event_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="IDS event not found")
+    return {"item": _serialize_ids_event(row)}
 
 
 @router.get("/stats")
@@ -250,6 +381,53 @@ def ids_stats_trend(
     return {"dates": dates, "counts": counts}
 
 
+@router.get("/log-audit")
+def list_ids_log_audit(
+    action: str | None = Query(None),
+    target_type: str | None = Query(None),
+    user_name: str | None = Query(None),
+    severity: str | None = Query(None),
+    limit: int = Query(80, ge=1, le=300),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(_admin),
+):
+    base_query = db.query(AuditLog).filter(AuditLog.action.like("ids_%")).order_by(AuditLog.created_at.desc())
+    if action:
+        base_query = base_query.filter(AuditLog.action == action)
+    if target_type:
+        base_query = base_query.filter(AuditLog.target_type == target_type)
+    if user_name:
+        base_query = base_query.filter(AuditLog.user_name == user_name)
+
+    rows = base_query.limit(1200).all()
+    serialized = [_serialize_ids_audit_log(row) for row in rows]
+    if severity:
+        serialized = [item for item in serialized if item["severity"] == severity]
+
+    total = len(serialized)
+    window = serialized[offset : offset + limit]
+    severity_counts = Counter(item["severity"] for item in serialized)
+    action_counts = Counter(item["action"] for item in serialized)
+    target_counts = Counter(item["target_type"] for item in serialized)
+
+    return {
+        "items": window,
+        "total": total,
+        "summary": {
+            "total": total,
+            "critical": severity_counts.get("critical", 0),
+            "suspicious": severity_counts.get("suspicious", 0),
+            "informational": severity_counts.get("informational", 0),
+            "by_action": [{"action": key, "count": count} for key, count in action_counts.most_common(8)],
+            "by_target_type": [{"target_type": key, "count": count} for key, count in target_counts.most_common(8)],
+        },
+        "available_actions": sorted({item["action"] for item in serialized if item["action"]}),
+        "available_targets": sorted({item["target_type"] for item in serialized if item["target_type"]}),
+        "available_severities": ["critical", "suspicious", "informational"],
+    }
+
+
 @router.get("/sources")
 def list_ids_sources(
     db: Session = Depends(get_db),
@@ -281,7 +459,7 @@ def list_ids_sources(
 def create_ids_source(
     req: SourceRegistryRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(_admin),
+    current_user: User = Depends(_admin),
 ):
     payload = _validate_source_registry_request(req, db=db)
     source = IDSSource(
@@ -292,11 +470,23 @@ def create_ids_source(
         operational_status=payload["operational_status"],
         freshness_target_hours=payload["freshness_target_hours"],
         sync_mode=payload["sync_mode"],
+        sync_endpoint=payload["sync_endpoint"],
         provenance_note=payload["provenance_note"],
         last_sync_status=SYNC_STATUS_NEVER,
         last_sync_detail="Awaiting first sync.",
     )
     db.add(source)
+    _log_ids_audit(
+        db,
+        user=current_user,
+        action="ids_source_create",
+        target_type="ids_source",
+        target_id=payload["source_key"],
+        detail=(
+            f"Created IDS source {payload['display_name']} "
+            f"(trust={payload['trust_classification']}, sync_mode={payload['sync_mode']})."
+        ),
+    )
     db.commit()
     db.refresh(source)
     return _serialize_ids_source(source, activity={}, attempts=[], package_intakes=[], package_activation=None)
@@ -307,7 +497,7 @@ def update_ids_source(
     source_id: int,
     req: SourceRegistryRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(_admin),
+    current_user: User = Depends(_admin),
 ):
     source = _get_source_or_404(db, source_id)
     payload = _validate_source_registry_request(req, db=db, source_id=source_id)
@@ -318,9 +508,22 @@ def update_ids_source(
     source.operational_status = payload["operational_status"]
     source.freshness_target_hours = payload["freshness_target_hours"]
     source.sync_mode = payload["sync_mode"]
+    source.sync_endpoint = payload["sync_endpoint"]
     source.provenance_note = payload["provenance_note"]
+    _log_ids_audit(
+        db,
+        user=current_user,
+        action="ids_source_update",
+        target_type="ids_source",
+        target_id=str(source.id),
+        detail=(
+            f"Updated IDS source {payload['source_key']} "
+            f"(trust={payload['trust_classification']}, sync_mode={payload['sync_mode']})."
+        ),
+    )
     db.commit()
     db.refresh(source)
+    _refresh_runtime_cache_safely(reason="source update", source_key=source.source_key or "")
     activity_map = list_recent_source_activity(db, [source.source_key or ""])
     attempts_map = list_recent_sync_attempts(db, [int(source.id)])
     intake_map = list_recent_package_intakes(db, [int(source.id)])
@@ -339,7 +542,7 @@ def trigger_ids_source_sync(
     source_id: int,
     req: SourceSyncRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(_admin),
+    current_user: User = Depends(_admin),
 ):
     source = _get_source_or_404(db, source_id)
     triggered_by = (req.triggered_by or "").strip()[:64]
@@ -349,23 +552,82 @@ def trigger_ids_source_sync(
 
     started_at = datetime.utcnow()
     result_status = SYNC_STATUS_SUCCESS
-    detail = reason or "Metadata refresh completed."
+    detail = ""
+    package_version = ""
+    package_intake_id: int | None = None
+    resolved_sync_endpoint = ""
+    activation_required = False
+    synced_rule_count = 0
+    synced_artifact_path = ""
+    synced_artifact_sha256 = ""
 
     if source.operational_status == SOURCE_STATUS_DISABLED:
         result_status = SYNC_STATUS_SKIPPED
-        detail = reason or "Skipped because the source is disabled."
+        detail = _append_operator_note("Skipped because the source is disabled.", note=reason)
     elif source.operational_status == SOURCE_STATUS_DRAFT:
         result_status = SYNC_STATUS_SKIPPED
-        detail = reason or "Skipped because the source is still in draft state."
+        detail = _append_operator_note("Skipped because the source is still in draft state.", note=reason)
     elif source.sync_mode == SYNC_MODE_NOT_APPLICABLE:
         result_status = SYNC_STATUS_SKIPPED
-        detail = reason or "Skipped because sync is not applicable for this source."
+        detail = _append_operator_note("Skipped because sync is not applicable for this source.", note=reason)
     elif source.operational_status == SOURCE_STATUS_FAILING:
         result_status = SYNC_STATUS_FAILED
-        detail = reason or "Sync failed because the source is currently marked failing."
+        detail = _append_operator_note(
+            "Sync failed because the source is currently marked failing.",
+            note=reason,
+        )
+    else:
+        try:
+            sync_payload = load_source_sync_payload(source)
+            package_version = str(sync_payload.get("package_version") or "")[:64]
+            resolved_sync_endpoint = str(sync_payload.get("manifest_path") or source.sync_endpoint or "")[:255]
+            synced_rule_count = int(sync_payload.get("rule_count") or 0)
+            synced_artifact_path = str(sync_payload.get("artifact_path") or "")[:255]
+            synced_artifact_sha256 = str(sync_payload.get("artifact_sha256") or "")[:64]
+            latest_activation_map = list_latest_package_activations(db, [int(source.id)])
+            preview = build_package_preview_summary(
+                source,
+                package_version=package_version,
+                release_timestamp=sync_payload.get("release_timestamp"),
+                provenance_note=str(sync_payload.get("provenance_note") or ""),
+                active_activation=latest_activation_map.get(int(source.id)),
+                artifact_path=synced_artifact_path,
+                artifact_sha256=synced_artifact_sha256,
+                artifact_size_bytes=int(sync_payload.get("artifact_size_bytes") or 0),
+                rule_count=synced_rule_count,
+            )
+            detail = _append_operator_note(str(sync_payload.get("sync_detail") or "Source sync completed."), note=reason)
+            intake = IDSSourcePackageIntake(
+                source_id=source.id,
+                source_key=source.source_key or "",
+                package_version=package_version,
+                release_timestamp=sync_payload.get("release_timestamp"),
+                trust_classification=str(sync_payload.get("trust_classification") or source.trust_classification or ""),
+                detector_family=str(sync_payload.get("detector_family") or source.detector_family or ""),
+                provenance_note=str(sync_payload.get("provenance_note") or ""),
+                intake_result=PACKAGE_RESULT_PREVIEWED,
+                intake_detail=f"{preview['version_change_state'] or 'synchronized'}: {detail}"[:1000],
+                artifact_path=synced_artifact_path,
+                artifact_sha256=synced_artifact_sha256,
+                artifact_size_bytes=int(sync_payload.get("artifact_size_bytes") or 0),
+                rule_count=synced_rule_count,
+                triggered_by=triggered_by,
+            )
+            db.add(intake)
+            db.flush()
+            package_intake_id = int(intake.id)
+            activation_required = (
+                (preview.get("version_change_state") or "") != "unchanged"
+                and (source.trust_classification or "").strip() != SOURCE_DEMO_TEST
+            )
+            source.last_synced_at = started_at
+            source.last_sync_status = SYNC_STATUS_SUCCESS
+            source.last_sync_detail = detail
+        except SourceSyncValidationError as exc:
+            result_status = SYNC_STATUS_FAILED
+            detail = _append_operator_note(str(exc), note=reason)
 
     if result_status == SYNC_STATUS_SUCCESS:
-        source.last_synced_at = started_at
         source.last_sync_status = SYNC_STATUS_SUCCESS
         source.last_sync_detail = detail
     else:
@@ -382,9 +644,25 @@ def trigger_ids_source_sync(
         result_status=result_status,
         detail=detail,
         freshness_after_sync=health_state,
+        package_version=package_version,
+        package_intake_id=package_intake_id,
+        resolved_sync_endpoint=resolved_sync_endpoint or (source.sync_endpoint or ""),
         triggered_by=triggered_by,
     )
     db.add(attempt)
+    db.flush()
+    _log_ids_audit(
+        db,
+        user=current_user,
+        action="ids_source_sync",
+        target_type="ids_source",
+        target_id=str(source.id),
+        detail=(
+            f"Sync {result_status} for {source.source_key}; "
+            f"package={package_version or '-'}; rules={synced_rule_count}; "
+            f"endpoint={resolved_sync_endpoint or source.sync_endpoint or '-'}"
+        ),
+    )
     db.commit()
     db.refresh(source)
     db.refresh(attempt)
@@ -407,6 +685,14 @@ def trigger_ids_source_sync(
         "health_state": serialized["health_state"],
         "last_synced_at": serialized["last_synced_at"],
         "detail": attempt.detail or "",
+        "package_version": package_version,
+        "package_intake_id": package_intake_id,
+        "resolved_sync_endpoint": resolved_sync_endpoint or (source.sync_endpoint or ""),
+        "activation_required": activation_required,
+        "rule_count": synced_rule_count,
+        "artifact_path": synced_artifact_path,
+        "artifact_sha256": synced_artifact_sha256,
+        "change_summary": attempt.detail or "",
         "source": serialized,
     }
 
@@ -415,7 +701,7 @@ def trigger_ids_source_sync(
 def preview_ids_source_package(
     req: SourcePackagePreviewRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(_admin),
+    current_user: User = Depends(_admin),
 ):
     source_key = normalize_source_key(req.source_key)
     package_version = (req.package_version or "").strip()[:64]
@@ -474,6 +760,18 @@ def preview_ids_source_package(
         triggered_by=triggered_by,
     )
     db.add(intake)
+    db.flush()
+    _log_ids_audit(
+        db,
+        user=current_user,
+        action="ids_package_preview",
+        target_type="source_package",
+        target_id=str(intake.id),
+        detail=(
+            f"Previewed package {package_version} for {source_key}; "
+            f"change_state={preview['version_change_state']}"
+        ),
+    )
     db.commit()
     db.refresh(intake)
     return {
@@ -492,7 +790,7 @@ def preview_ids_source_package(
 def activate_ids_source_package(
     req: SourcePackageActivationRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(_admin),
+    current_user: User = Depends(_admin),
 ):
     triggered_by = (req.triggered_by or "").strip()[:64]
     activation_note = (req.activation_note or "").strip()[:1000]
@@ -535,8 +833,21 @@ def activate_ids_source_package(
     intake.intake_result = PACKAGE_RESULT_ACTIVATED
     intake.intake_detail = detail
     db.add(activation)
+    db.flush()
+    _log_ids_audit(
+        db,
+        user=current_user,
+        action="ids_package_activate",
+        target_type="source_package",
+        target_id=str(intake.id),
+        detail=(
+            f"Activated package {activation.package_version} for {source.source_key}; "
+            f"activation_id={activation.id}"
+        ),
+    )
     db.commit()
     db.refresh(activation)
+    _refresh_runtime_cache_safely(reason="package activation", source_key=source.source_key or "")
 
     return {
         "source_id": source.id,
@@ -743,13 +1054,21 @@ def ingest_ids_event(
 def archive_event(
     event_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(_admin),
+    current_user: User = Depends(_admin),
 ):
     evt = _get_event_or_404(db, event_id)
     evt.archived = 1
     evt.status = "closed"
     evt.response_result = "success"
     evt.response_detail = "archived_by_operator"
+    _log_ids_audit(
+        db,
+        user=current_user,
+        action="ids_event_archive",
+        target_type="ids_event",
+        target_id=str(evt.id),
+        detail=f"Archived IDS event {evt.id} from {evt.client_ip} ({evt.attack_type}).",
+    )
     db.commit()
     return {"code": 200, "message": "Event archived"}
 
@@ -758,7 +1077,7 @@ def archive_event(
 def analyze_event_ai(
     event_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(_admin),
+    current_user: User = Depends(_admin),
 ):
     if not settings.IDS_AI_ANALYSIS:
         raise HTTPException(status_code=400, detail="IDS_AI_ANALYSIS is disabled")
@@ -767,6 +1086,18 @@ def analyze_event_ai(
     _get_event_or_404(db, event_id)
     run_ai_analysis_sync(event_id)
     evt = _get_event_or_404(db, event_id)
+    _log_ids_audit(
+        db,
+        user=current_user,
+        action="ids_event_ai_analyze",
+        target_type="ids_event",
+        target_id=str(evt.id),
+        detail=(
+            f"Ran AI analysis for IDS event {evt.id}; "
+            f"risk={evt.ai_risk_level or 'unknown'}; confidence={int(evt.ai_confidence or 0)}"
+        ),
+    )
+    db.commit()
     return {
         "code": 200,
         "message": "AI analysis completed",
@@ -782,7 +1113,7 @@ def update_event_status(
     event_id: int,
     req: UpdateStatusRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(_admin),
+    current_user: User = Depends(_admin),
 ):
     allowed = {"new", "investigating", "mitigated", "false_positive", "closed"}
     status = (req.status or "").strip()
@@ -793,6 +1124,14 @@ def update_event_status(
     evt.review_note = (req.review_note or "")[:2000]
     evt.response_result = "success"
     evt.response_detail = f"status_updated::{status}"
+    _log_ids_audit(
+        db,
+        user=current_user,
+        action="ids_event_status_update",
+        target_type="ids_event",
+        target_id=str(evt.id),
+        detail=f"Updated IDS event {evt.id} to status={status}.",
+    )
     db.commit()
     return {"code": 200, "message": "Status updated", "status": evt.status}
 
@@ -801,7 +1140,7 @@ def update_event_status(
 def block_event_ip(
     event_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(_admin),
+    current_user: User = Depends(_admin),
 ):
     evt = _get_event_or_404(db, event_id)
     ok, msg = block_ip_windows(evt.client_ip or "")
@@ -811,6 +1150,14 @@ def block_event_ip(
     evt.action_taken = "manual_block" if ok else "manual_block_failed"
     evt.response_result = "success" if ok else "failed"
     evt.response_detail = msg[:1000]
+    _log_ids_audit(
+        db,
+        user=current_user,
+        action="ids_event_block",
+        target_type="ids_event",
+        target_id=str(evt.id),
+        detail=f"Block {'succeeded' if ok else 'failed'} for {evt.client_ip}: {msg[:220]}",
+    )
     db.commit()
     return {"code": 200, "message": "Block executed" if ok else f"Block failed: {msg}", "ok": ok, "rule": msg}
 
@@ -819,7 +1166,7 @@ def block_event_ip(
 def unblock_event_ip(
     event_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(_admin),
+    current_user: User = Depends(_admin),
 ):
     evt = _get_event_or_404(db, event_id)
     ok, msg = unblock_ip_windows(evt.client_ip or "")
@@ -828,6 +1175,14 @@ def unblock_event_ip(
     evt.action_taken = "manual_unblock" if ok else "manual_unblock_failed"
     evt.response_result = "success" if ok else "failed"
     evt.response_detail = msg[:1000]
+    _log_ids_audit(
+        db,
+        user=current_user,
+        action="ids_event_unblock",
+        target_type="ids_event",
+        target_id=str(evt.id),
+        detail=f"Unblock {'succeeded' if ok else 'failed'} for {evt.client_ip}: {msg[:220]}",
+    )
     db.commit()
     return {"code": 200, "message": "Unblock executed" if ok else f"Unblock failed: {msg}", "ok": ok}
 
@@ -844,6 +1199,7 @@ def get_event_report(
         run_ai_analysis_sync(event_id)
         evt = _get_event_or_404(db, event_id)
 
+    upload_trace = _extract_upload_trace(evt)
     report = {
         "event_id": evt.id,
         "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
@@ -888,6 +1244,7 @@ def get_event_report(
             "source_version": evt.source_version or "",
             "source_freshness": evt.source_freshness or "",
         },
+        "upload_trace": upload_trace,
         "ai_analysis": evt.ai_analysis or "",
     }
     markdown = (
@@ -909,6 +1266,18 @@ def get_event_report(
         f"- Query: {(evt.query_snippet or '-')[:500]}\n"
         f"- Body: {(evt.body_snippet or '-')[:500]}\n"
         f"- User-Agent: {(evt.user_agent or '-')[:300]}\n\n"
+        + (
+            "## Upload Audit Trace\n"
+            f"- Saved As: {upload_trace.get('saved_as') or '-'}\n"
+            f"- Original Name: {upload_trace.get('file_name') or '-'}\n"
+            f"- Audit Verdict: {((upload_trace.get('audit') or {}).get('verdict')) or '-'}\n"
+            f"- Audit Risk: {((upload_trace.get('audit') or {}).get('risk_level')) or '-'}\n"
+            f"- Audit Confidence: {int(((upload_trace.get('audit') or {}).get('confidence')) or 0)}\n"
+            f"- Summary: {((upload_trace.get('audit') or {}).get('summary')) or '-'}\n\n"
+            if upload_trace
+            else ""
+        )
+        + 
         "## AI Analysis\n"
         f"- Risk Level: {evt.ai_risk_level or 'unknown'}\n"
         f"- AI Confidence: {int(evt.ai_confidence or 0)}\n\n"
@@ -1179,7 +1548,7 @@ def reset_demo_events(
 def archive_batch(
     req: ArchiveBatchRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(_admin),
+    current_user: User = Depends(_admin),
 ):
     event_ids = req.event_ids or []
     if not event_ids:
@@ -1192,6 +1561,14 @@ def archive_batch(
             IDSEvent.response_detail: "archived_by_batch",
         },
         synchronize_session=False,
+    )
+    _log_ids_audit(
+        db,
+        user=current_user,
+        action="ids_event_archive_batch",
+        target_type="ids_event_batch",
+        target_id=",".join(str(event_id) for event_id in event_ids[:20]),
+        detail=f"Archived {len(event_ids)} IDS events in one batch action.",
     )
     db.commit()
     return {"code": 200, "message": f"Archived {len(event_ids)} events", "archived": len(event_ids)}
@@ -1354,6 +1731,70 @@ def _event_origin_label(origin: str | None) -> str:
     return labels.get((origin or "").strip(), origin or REAL_EVENT_ORIGIN)
 
 
+def _format_duration(total_seconds: int) -> str:
+    total_seconds = max(0, int(total_seconds))
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _derive_location_from_ip(client_ip: str | None) -> dict[str, object]:
+    if not client_ip:
+        point = _SITUATION_GEO_POINTS[0]
+    else:
+        digest = hashlib.md5(client_ip.encode("utf-8")).hexdigest()
+        index = int(digest[:8], 16) % len(_SITUATION_GEO_POINTS)
+        point = _SITUATION_GEO_POINTS[index]
+    return {
+        "country": point["country"],
+        "city": point["city"],
+        "lat": point["lat"],
+        "lng": point["lng"],
+        "derived": True,
+    }
+
+
+def _situation_severity(row: IDSEvent) -> str:
+    score = int(row.risk_score or 0)
+    if score >= 85:
+        return "致命"
+    if score >= 70:
+        return "高危"
+    if score >= 45:
+        return "中危"
+    return "低危"
+
+
+def _situation_status(row: IDSEvent) -> str:
+    if row.blocked == 1:
+        return "已阻断"
+    if (row.status or "").strip() in {"investigating", "new"}:
+        return "研判中"
+    if (row.status or "").strip() == "mitigated":
+        return "已缓解"
+    return "已记录"
+
+
+def _serialize_situation_attack(row: IDSEvent) -> dict[str, object]:
+    location = _derive_location_from_ip(row.client_ip)
+    created_at = row.created_at.strftime("%Y-%m-%d %H:%M:%S") if row.created_at else ""
+    return {
+        "id": str(row.id),
+        "timestamp": created_at,
+        "source_ip": row.client_ip or "-",
+        "source_location": location,
+        "target_ip": _TARGET_LOCATION["ip"],
+        "target_location": {"lat": _TARGET_LOCATION["lat"], "lng": _TARGET_LOCATION["lng"]},
+        "attack_type": _attack_type_label(row.attack_type),
+        "severity": _situation_severity(row),
+        "status": _situation_status(row),
+        "blocked": bool(row.blocked),
+        "detector_name": row.detector_name or "",
+        "uptime": _format_duration((datetime.utcnow() - _SITUATION_SERVICE_STARTED_AT).total_seconds()),
+    }
+
+
 def _get_source_or_404(db: Session, source_id: int) -> IDSSource:
     source = db.query(IDSSource).filter(IDSSource.id == source_id).first()
     if not source:
@@ -1373,6 +1814,7 @@ def _validate_source_registry_request(
     detector_family = (req.detector_family or "").strip()[:32]
     operational_status = (req.operational_status or "").strip()
     sync_mode = (req.sync_mode or "").strip()
+    sync_endpoint = (req.sync_endpoint or "").strip()[:255]
     provenance_note = (req.provenance_note or "").strip()[:2000]
 
     if not source_key:
@@ -1389,6 +1831,8 @@ def _validate_source_registry_request(
         raise HTTPException(status_code=400, detail=f"Invalid sync_mode: {sync_mode}")
     if trust_classification == SOURCE_DEMO_TEST and sync_mode != SYNC_MODE_NOT_APPLICABLE:
         raise HTTPException(status_code=400, detail="demo_test sources must use sync_mode=not_applicable")
+    if sync_mode != SYNC_MODE_NOT_APPLICABLE and not sync_endpoint:
+        raise HTTPException(status_code=400, detail="sync_endpoint is required unless sync_mode=not_applicable")
 
     existing = db.query(IDSSource).filter(IDSSource.source_key == source_key).first()
     if existing and existing.id != source_id:
@@ -1402,12 +1846,92 @@ def _validate_source_registry_request(
         "operational_status": operational_status,
         "freshness_target_hours": int(req.freshness_target_hours),
         "sync_mode": sync_mode,
+        "sync_endpoint": sync_endpoint if sync_mode != SYNC_MODE_NOT_APPLICABLE else "",
         "provenance_note": provenance_note,
     }
 
 
 def _format_dt(value: datetime | None) -> str | None:
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else None
+
+
+def _safe_parse_json_object(raw: str | None) -> dict[str, Any] | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _extract_upload_saved_as(body_snippet: str | None) -> str:
+    snippet = body_snippet or ""
+    match = re.search(r"saved_as=([^;\\s]+)", snippet)
+    return match.group(1)[:255] if match else ""
+
+
+def _extract_upload_sha256(body_snippet: str | None) -> str:
+    snippet = body_snippet or ""
+    match = re.search(r"sha256=([0-9a-fA-F]{16,64})", snippet)
+    return match.group(1).lower()[:64] if match else ""
+
+
+def _extract_upload_trace(row: IDSEvent) -> dict[str, Any] | None:
+    looks_like_upload_gate = (
+        (row.detector_name or "") in {"upload_ai_gate", "upload_audit_gate"}
+        or (row.action_taken or "").startswith("upload::")
+        or (row.path or "") == "/api/upload"
+    )
+    payload = _safe_parse_json_object(row.detect_detail)
+    if not looks_like_upload_gate and not payload:
+        return None
+
+    audit = payload.get("audit") if isinstance(payload, dict) and isinstance(payload.get("audit"), dict) else {}
+    raw_indicators = payload.get("indicators") if isinstance(payload, dict) and isinstance(payload.get("indicators"), list) else []
+    indicators = []
+    for item in raw_indicators[:6]:
+        if isinstance(item, dict):
+            indicators.append(
+                {
+                    "code": str(item.get("code") or "")[:64],
+                    "detail": str(item.get("detail") or "")[:255],
+                }
+            )
+
+    saved_as = str((payload or {}).get("saved_as") or _extract_upload_saved_as(row.body_snippet) or "")[:255]
+    file_name = str((payload or {}).get("file_name") or "")[:255]
+    sha256 = str((payload or {}).get("sha256") or _extract_upload_sha256(row.body_snippet) or "")[:64]
+    summary = str(audit.get("summary") or row.response_detail or "")[:1000]
+    if not any([saved_as, file_name, sha256, summary, indicators]):
+        return None
+
+    return {
+        "saved_as": saved_as,
+        "file_name": file_name,
+        "sha256": sha256,
+        "size": int((payload or {}).get("size") or 0),
+        "storage_location": str((payload or {}).get("storage_location") or "quarantine")[:64],
+        "indicator_count": len(raw_indicators),
+        "indicators": indicators,
+        "audit": {
+            "verdict": str(audit.get("verdict") or row.response_result or "")[:32],
+            "risk_level": str(audit.get("risk_level") or row.ai_risk_level or "")[:32],
+            "confidence": max(0, min(100, int(audit.get("confidence") or row.ai_confidence or row.confidence or 0))),
+            "summary": summary,
+            "provider": str(audit.get("provider") or audit.get("engine") or row.source_version or "")[:128],
+            "analysis_mode": str(audit.get("analysis_mode") or "")[:32],
+            "analysis_mode_label": str(audit.get("analysis_mode_label") or "")[:32],
+            "llm_used": bool(audit.get("llm_used")),
+            "ai_available": bool(audit.get("ai_available")),
+            "recommended_actions": [
+                str(action).strip()[:255]
+                for action in (audit.get("recommended_actions") or [])
+                if str(action).strip()
+            ][:5],
+        },
+    }
 
 
 def _serialize_source_sync_attempt(attempt: IDSSourceSyncAttempt) -> dict:
@@ -1419,6 +1943,9 @@ def _serialize_source_sync_attempt(attempt: IDSSourceSyncAttempt) -> dict:
         "result_status": attempt.result_status or "",
         "detail": (attempt.detail or "")[:1000],
         "freshness_after_sync": attempt.freshness_after_sync or "",
+        "package_version": attempt.package_version or "",
+        "package_intake_id": attempt.package_intake_id,
+        "resolved_sync_endpoint": attempt.resolved_sync_endpoint or "",
         "triggered_by": attempt.triggered_by or "",
     }
 
@@ -1443,6 +1970,10 @@ def _serialize_ids_source(
         release_timestamp=package_intakes[0].release_timestamp if package_intakes else None,
         provenance_note=package_intakes[0].provenance_note if package_intakes else "",
         active_activation=package_activation,
+        artifact_path=package_intakes[0].artifact_path if package_intakes else "",
+        artifact_sha256=package_intakes[0].artifact_sha256 if package_intakes else "",
+        artifact_size_bytes=package_intakes[0].artifact_size_bytes if package_intakes else None,
+        rule_count=package_intakes[0].rule_count if package_intakes else None,
     ) if package_intakes else None
     return {
         "id": source.id,
@@ -1453,6 +1984,7 @@ def _serialize_ids_source(
         "operational_status": source.operational_status or "",
         "freshness_target_hours": int(source.freshness_target_hours or 0),
         "sync_mode": source.sync_mode or "",
+        "sync_endpoint": (source.sync_endpoint or "")[:255],
         "last_synced_at": _format_dt(source.last_synced_at),
         "last_sync_status": source.last_sync_status or "",
         "last_sync_detail": (source.last_sync_detail or "")[:1000],
@@ -1486,6 +2018,10 @@ def _serialize_source_package_intake(intake: IDSSourcePackageIntake) -> dict:
         "provenance_note": (intake.provenance_note or "")[:2000],
         "intake_result": intake.intake_result or "",
         "intake_detail": (intake.intake_detail or "")[:1000],
+        "artifact_path": (intake.artifact_path or "")[:255],
+        "artifact_sha256": (intake.artifact_sha256 or "")[:64],
+        "artifact_size_bytes": int(intake.artifact_size_bytes or 0),
+        "rule_count": int(intake.rule_count or 0),
         "triggered_by": intake.triggered_by or "",
         "created_at": _format_dt(intake.created_at),
     }
@@ -1548,6 +2084,28 @@ def _build_activation_failure_detail(reason: str, *, activation_note: str = "") 
     return reason
 
 
+def _append_operator_note(detail: str, *, note: str = "") -> str:
+    detail = (detail or "").strip()
+    note = (note or "").strip()
+    if not note:
+        return detail[:1000]
+    if not detail:
+        return f"Operator note: {note}"[:1000]
+    return f"{detail} Operator note: {note}"[:1000]
+
+
+def _refresh_runtime_cache_safely(*, reason: str, source_key: str = "") -> None:
+    try:
+        refresh_runtime_rule_cache()
+    except Exception as exc:
+        logger.warning(
+            "IDS runtime cache refresh failed after %s for %s: %s",
+            reason,
+            source_key or "-",
+            exc,
+        )
+
+
 def _summarize_sources(items: list[dict]) -> dict:
     healthy_count = sum(1 for item in items if item.get("health_state") == HEALTH_HEALTHY)
     degraded_count = sum(1 for item in items if item.get("health_state") != HEALTH_HEALTHY)
@@ -1563,6 +2121,7 @@ def _summarize_sources(items: list[dict]) -> dict:
 
 
 def _serialize_ids_event(row: IDSEvent) -> dict:
+    upload_trace = _extract_upload_trace(row)
     return {
         "id": row.id,
         "client_ip": row.client_ip,
@@ -1594,6 +2153,7 @@ def _serialize_ids_event(row: IDSEvent) -> dict:
         "action_taken": row.action_taken or "",
         "response_result": row.response_result or "",
         "response_detail": (row.response_detail or "")[:1000],
+        "upload_trace": upload_trace,
         "risk_score": int(row.risk_score or 0),
         "confidence": int(row.confidence or 0),
         "hit_count": int(row.hit_count or 0),

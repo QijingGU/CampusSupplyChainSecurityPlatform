@@ -28,6 +28,7 @@ Show one real end-to-end chain:
 - Admin account ready: `system_admin / 123456`
 - Three tabs ready:
   - `/upload`
+  - `/security/log-audit`
   - `/security/sandbox`
   - `/security/ids`
   - `/security/situation`
@@ -204,6 +205,7 @@ Show one real end-to-end chain:
 - Format-aware audit now distinguishes real document/image containers from suspicious binary payloads, so normal `docx/png/pdf` uploads are not blocked just because they are binary files.
 - `review` and `quarantine` both enter the sandbox, so operators can hold and
   inspect suspicious uploads before release.
+- The request-side IDS matcher is now real too. Baseline SQLi/XSS/path-traversal/command-injection probes are scored by the in-process engine, while activated trusted `web` rule packages can add runtime matches with source attribution.
 - The situation page is driven by real incidents, but the map positions are
   approximate derived visualization, not exact geo-IP intelligence.
 - The Security IDS page no longer exposes hidden demo triggers, and the
@@ -265,6 +267,29 @@ Show one real end-to-end chain:
 
 - `Sync Audit` shows the latest result, timestamp, operator, detail, and manifest path.
 - Package intake history shows the same `2026.04.06` package plus the persisted intake detail.
+
+## Demo Extension - Runtime Request Matching
+
+### Setup
+
+- Keep `/security/ids` open on the latest incident list.
+- Make sure the `suricata-web-prod` package is already activated from the source-sync demo extension.
+
+### Scene 10 - Show That Runtime Matching Is No Longer Inline-only
+
+**Action**
+
+- Visit `GET /runtime-probe?sample=../`.
+- Return to `/security/ids` and open the newest event.
+
+**What To Say**
+
+“这里不是只做上传审计。运行时请求本身也会经过 IDS 匹配。现在除了内建的 SQLi/XSS/路径穿越等基础特征外，已经激活的受信规则包也会真正进入运行时缓存，所以这条事件会明确标注命中的规则源、版本和规则 ID。” 
+
+**Expected Result**
+
+- The newest IDS event is attributed to the activated source package instead of `inline_request_matcher / legacy-inline`.
+- The event shows `detector_name=suricata-web-prod`, the imported package version, and the matched `sid`.
 
 ### Source Sync Talking Points
 

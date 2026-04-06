@@ -71,10 +71,10 @@ class Settings(BaseSettings):
     IDS_BLOCK_THRESHOLD: int = 70
 
     # LLM 智能体（可选，不配置则用规则引擎）
-    LLM_PROVIDER: str = "ollama"  # ollama | openai | deepseek
+    LLM_PROVIDER: str = "deepseek"  # deepseek | kimi | openai | ollama
     LLM_BASE_URL: str | None = None  # 如 http://127.0.0.1:11434 则启用 Ollama
     LLM_API_KEY: str | None = None
-    LLM_MODEL: str = "qwen2:7b"  # Ollama 模型名，或 openai 的 model
+    LLM_MODEL: str = "deepseek-chat"  # DeepSeek/Kimi/OpenAI/Ollama 模型名
 
     @field_validator("LLM_BASE_URL", mode="before")
     @classmethod

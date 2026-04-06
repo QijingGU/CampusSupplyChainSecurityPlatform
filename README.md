@@ -85,12 +85,14 @@ powershell -ExecutionPolicy Bypass -File .\stop-ids-dev.ps1
 
 ## IDS Security Center
 
-The security-center upload, sandbox, and situation pages now drive real IDS work instead of demo-only copy.
+The security-center upload, IDS, log-audit, sandbox, and situation pages now drive real IDS work instead of demo-only copy.
 
 - Public uploads run the AI audit gate in `backend/app/api/upload.py`. Safe files are stored under `uploads/accepted`, while review/quarantine verdicts keep the file in `quarantine_uploads` plus a JSON audit report in `upload_reports` that feeds the UI.
 - The public upload page now keeps a single consistent final state for each request: released, quarantined, or rejected. Closing the quarantine dialog no longer rewrites the same request into a fake “network error”.
+- `/security/ids` now stays on real incidents, trusted-source sync state, package activation state, and upload evidence. Event reports include `Upload Audit Trace`, and upload-gated incidents can jump directly back into the matching sandbox report.
 - Suspicious samples show up in `/security/sandbox` via `GET /api/upload/quarantine`, and `POST /api/upload/quarantine/analyze` reruns the real analysis on the persisted file so the drawer displays the verdict, risk, confidence, SHA-256, the indicator list, and the same persisted report after refresh.
 - `/security/log-audit` is the dedicated IDS audit trail. It links upload gate actions, sandbox actions, source sync history, and incident follow-up into one traceable review surface.
+- The request-side runtime matcher now covers baseline SQL injection, XSS, path traversal, command injection, JNDI, and scanner probes in `backend/app/services/ids_engine.py`, while activated trusted `web` source packages can contribute additional runtime rules. Matching requests persist detector provenance and only return `403` when the score crosses `IDS_BLOCK_THRESHOLD`.
 - The sandbox analysis produces IDS metrics that the situation page consumes through `GET /api/ids/situation`, so `/security/situation` renders counters, recent incident cards, and IP-derived map arcs instead of random animation data.
 - IDS source operations on `/security/ids` now use a real local-manifest sync path instead of the old metadata-only stub. Each sync-backed source stores `sync_endpoint`, and `POST /api/ids/sources/{id}/sync` reads the bundled manifest/rule artifact, computes version, rule count, artifact path, and SHA-256, then records both Sync Audit and package-intake history for the UI.
 - Activated `web` source packages now feed the runtime matcher in `backend/app/services/ids_engine.py`. Matching requests preserve `detector_name=source_key`, `source_version=package_version`, and `source_rule_id=sid` instead of always falling back to `inline_request_matcher / legacy-inline`.

@@ -18,6 +18,10 @@ class IDSSourcePackageIntake(Base):
     provenance_note = Column(Text, default="")
     intake_result = Column(String(32), nullable=False, default="previewed", index=True)
     intake_detail = Column(Text, default="")
+    artifact_path = Column(String(255), default="")
+    artifact_sha256 = Column(String(64), default="")
+    artifact_size_bytes = Column(Integer, nullable=True)
+    rule_count = Column(Integer, nullable=True)
     triggered_by = Column(String(64), default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 

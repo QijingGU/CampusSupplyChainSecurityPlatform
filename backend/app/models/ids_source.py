@@ -16,6 +16,7 @@ class IDSSource(Base):
     operational_status = Column(String(32), nullable=False, default="enabled", index=True)
     freshness_target_hours = Column(Integer, nullable=False, default=24)
     sync_mode = Column(String(32), nullable=False, default="manual")
+    sync_endpoint = Column(String(255), default="")
     last_synced_at = Column(DateTime(timezone=True), nullable=True, index=True)
     last_sync_status = Column(String(32), nullable=False, default="never_synced", index=True)
     last_sync_detail = Column(Text, default="")
@@ -53,6 +54,9 @@ class IDSSourceSyncAttempt(Base):
     result_status = Column(String(32), nullable=False, default="success", index=True)
     detail = Column(Text, default="")
     freshness_after_sync = Column(String(32), default="")
+    package_version = Column(String(64), default="")
+    package_intake_id = Column(Integer, nullable=True)
+    resolved_sync_endpoint = Column(String(255), default="")
     triggered_by = Column(String(64), default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 

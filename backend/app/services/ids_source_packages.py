@@ -117,6 +117,10 @@ def build_package_preview_summary(
     release_timestamp: datetime | None = None,
     provenance_note: str = "",
     active_activation: IDSSourcePackageActivation | None = None,
+    artifact_path: str = "",
+    artifact_sha256: str = "",
+    artifact_size_bytes: int | None = None,
+    rule_count: int | None = None,
 ) -> dict:
     changed_fields: list[str] = []
     active_version = active_activation.package_version if active_activation else ""
@@ -127,6 +131,14 @@ def build_package_preview_summary(
         changed_fields.append("release_timestamp")
     if provenance_note and provenance_note.strip() != (source.provenance_note or "").strip():
         changed_fields.append("provenance_note")
+    if artifact_path:
+        changed_fields.append("artifact_path")
+    if artifact_sha256:
+        changed_fields.append("artifact_sha256")
+    if artifact_size_bytes:
+        changed_fields.append("artifact_size_bytes")
+    if rule_count is not None:
+        changed_fields.append("rule_count")
     return {
         "source_id": source.id,
         "source_key": source.source_key or "",
@@ -134,6 +146,10 @@ def build_package_preview_summary(
         "version_change_state": version_change_state,
         "changed_fields": changed_fields,
         "visible_warning": _build_version_warning(version_change_state),
+        "artifact_path": artifact_path[:255],
+        "artifact_sha256": artifact_sha256[:64],
+        "artifact_size_bytes": int(artifact_size_bytes or 0),
+        "rule_count": int(rule_count or 0),
     }
 
 

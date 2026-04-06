@@ -1,4 +1,4 @@
-import axios from 'axios'
+﻿import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import router from '@/router'
@@ -9,7 +9,7 @@ const devBaseCandidates = [
   'http://127.0.0.1:8167/api',
 ]
 
-// 内网穿透：非本机访问时强制用 /api，避免请求发到访问者的 127.0.0.1
+// 鍐呯綉绌块€忥細闈炴湰鏈鸿闂椂寮哄埗鐢?/api锛岄伩鍏嶈姹傚彂鍒拌闂€呯殑 127.0.0.1
 function isLocalAccess(): boolean {
   if (typeof window === 'undefined') return true
   const host = window.location.hostname
@@ -35,7 +35,7 @@ async function pickDevBaseURL() {
 }
 
 async function resolveBaseURL() {
-  // 远程访问（内网穿透）：强制用 /api，否则会请求到访问者的 127.0.0.1
+  // 杩滅▼璁块棶锛堝唴缃戠┛閫忥級锛氬己鍒剁敤 /api锛屽惁鍒欎細璇锋眰鍒拌闂€呯殑 127.0.0.1
   if (!isLocalAccess()) return '/api'
   if (resolvedBaseURL) return resolvedBaseURL
   if (!import.meta.env.DEV) return '/api'
@@ -75,7 +75,7 @@ request.interceptors.response.use(
   (res) => {
     const { code, message } = res.data as { code?: number; message?: string }
     if (code !== undefined && code !== 200) {
-      ElMessage.error(message || '请求失败')
+      ElMessage.error(message || '璇锋眰澶辫触')
       return Promise.reject(new Error(message as string))
     }
     return res.data
@@ -86,8 +86,8 @@ request.interceptors.response.use(
       router.push('/login')
     }
     const msg = err.code === 'ERR_NETWORK'
-      ? '无法连接服务器，请确认后端已启动（uvicorn 8166）'
-      : (err.response?.data?.detail || err.response?.data?.message || err.message || '网络错误')
+      ? '无法连接服务器，请确认后端已启动（uvicorn 8166 或 8167）'
+      : (err.response?.data?.detail || err.response?.data?.message || err.message || '缃戠粶閿欒')
     ElMessage.error(typeof msg === 'string' ? msg : JSON.stringify(msg))
     return Promise.reject(err)
   }

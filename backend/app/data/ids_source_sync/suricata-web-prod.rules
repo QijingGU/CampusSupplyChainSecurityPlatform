@@ -1,0 +1,7 @@
+# Local fixture for IDS source sync validation.
+# Non-comment lines count as active rules in the current sync service.
+
+alert http any any -> any any (msg:"Campus SQLi probe"; flow:to_server,established; http.uri; content:"' OR 1=1"; nocase; sid:9001001; rev:1;)
+alert http any any -> any any (msg:"Campus XSS payload"; flow:to_server,established; http.request_body; content:"<script>"; nocase; sid:9001002; rev:1;)
+alert http any any -> any any (msg:"Campus path traversal"; flow:to_server,established; http.uri; content:"../"; sid:9001003; rev:1;)
+alert http any any -> any any (msg:"Campus webshell upload marker"; flow:to_server,established; file_data; content:"<?php"; nocase; sid:9001004; rev:1;)

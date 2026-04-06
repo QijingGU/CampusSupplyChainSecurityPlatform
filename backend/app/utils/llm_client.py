@@ -1,47 +1,106 @@
-"""LLM 调用封装：支持 Ollama / OpenAI 兼容 API / Function Calling"""
+"""LLM client wrappers for Ollama and OpenAI-compatible providers."""
+
+from __future__ import annotations
+
 import json
 import logging
-from ..config import settings
+
 import httpx
+
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
+API_KEY_PROVIDERS = {"openai", "deepseek", "kimi"}
+
+
+def _provider_name() -> str:
+    provider = (settings.LLM_PROVIDER or "").strip().lower()
+    return provider or "deepseek"
+
+
+def _provider_ready() -> bool:
+    provider = _provider_name()
+    if provider in API_KEY_PROVIDERS:
+        return bool(settings.LLM_API_KEY and str(settings.LLM_API_KEY).strip())
+    return bool(settings.LLM_BASE_URL and str(settings.LLM_BASE_URL).strip())
+
+
+def _resolved_model() -> str:
+    configured = (settings.LLM_MODEL or "").strip()
+    provider = _provider_name()
+    if configured and not (provider in API_KEY_PROVIDERS and configured == "qwen2:7b"):
+        return configured
+    if provider == "deepseek":
+        return "deepseek-chat"
+    if provider == "kimi":
+        return "moonshot-v1-8k"
+    if provider == "openai":
+        return "gpt-4.1-mini"
+    return configured or "qwen2:7b"
+
+
+def _compatible_base_url() -> str:
+    configured = (settings.LLM_BASE_URL or "").strip()
+    if configured:
+        return configured.rstrip("/")
+    provider = _provider_name()
+    if provider == "deepseek":
+        return "https://api.deepseek.com"
+    if provider == "kimi":
+        return "https://api.moonshot.cn/v1"
+    return "https://api.openai.com"
+
+
+def _chat_completions_path(base: str) -> str:
+    provider = _provider_name()
+    if provider == "deepseek":
+        return "/chat/completions"
+    if provider == "kimi":
+        return "/chat/completions" if base.endswith("/v1") else "/v1/chat/completions"
+    return "/v1/chat/completions"
+
 
 def _ollama_chat(messages: list[dict], model: str) -> str:
-    url = f"{settings.LLM_BASE_URL.rstrip('/')}/api/chat"
+    url = f"{str(settings.LLM_BASE_URL).rstrip('/')}/api/chat"
     with httpx.Client(timeout=60.0) as client:
-        r = client.post(url, json={"model": model, "messages": messages, "stream": False})
-        r.raise_for_status()
-        data = r.json()
+        response = client.post(url, json={"model": model, "messages": messages, "stream": False})
+        response.raise_for_status()
+        data = response.json()
         return data.get("message", {}).get("content", "")
 
 
-def _openai_chat(messages: list[dict], model: str) -> str:
-    base = (settings.LLM_BASE_URL or "https://api.openai.com").rstrip("/")
-    path = "/chat/completions" if settings.LLM_PROVIDER == "deepseek" else "/v1/chat/completions"
-    url = base + path
-    headers = {"Authorization": f"Bearer {settings.LLM_API_KEY or ''}", "Content-Type": "application/json"}
+def _openai_compatible_chat(messages: list[dict], model: str) -> str:
+    base = _compatible_base_url()
+    url = base + _chat_completions_path(base)
+    headers = {
+        "Authorization": f"Bearer {settings.LLM_API_KEY or ''}",
+        "Content-Type": "application/json",
+    }
     with httpx.Client(timeout=60.0) as client:
-        r = client.post(url, headers=headers, json={"model": model, "messages": messages})
-        r.raise_for_status()
-        data = r.json()
+        response = client.post(url, headers=headers, json={"model": model, "messages": messages})
+        response.raise_for_status()
+        data = response.json()
         return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 
 def chat(messages: list[dict], model: str | None = None) -> str | None:
-    """调用 LLM，失败返回 None"""
-    if not settings.LLM_BASE_URL and settings.LLM_PROVIDER != "openai":
+    """Call the configured LLM provider and return plain-text content."""
+    if not _provider_ready():
         return None
-    model = model or settings.LLM_MODEL
+
+    target_model = model or _resolved_model()
+    provider = _provider_name()
     try:
-        if settings.LLM_PROVIDER == "ollama":
-            return _ollama_chat(messages, model)
-        if settings.LLM_PROVIDER in ("openai", "deepseek"):
-            return _openai_chat(messages, model)
-    except Exception as e:
+        if provider == "ollama":
+            return _ollama_chat(messages, target_model)
+        if provider in API_KEY_PROVIDERS:
+            return _openai_compatible_chat(messages, target_model)
+    except Exception as exc:
         import traceback
-        logger.warning("LLM 调用失败: %s\n%s", str(e), traceback.format_exc())
-        print(f"[LLM] 调用失败: {e}")
+
+        logger.warning("LLM request failed: %s\n%s", str(exc), traceback.format_exc())
+        print(f"[LLM] request failed: {exc}")
     return None
 
 
@@ -50,47 +109,52 @@ def chat_with_tools(
     tools: list[dict],
     model: str | None = None,
 ) -> tuple[str | None, list[dict]]:
-    """
-    调用 LLM（支持 Function Calling），返回 (content, tool_calls)。
-    tool_calls 格式: [{"id": "...", "name": "fn", "arguments": {...}}, ...]
-    仅 DeepSeek/OpenAI 支持，Ollama 降级为普通 chat。
-    """
-    model = model or settings.LLM_MODEL
-    if settings.LLM_PROVIDER == "ollama":
-        # Ollama 大多数模型不支持 tools，降级为普通对话
-        content = _ollama_chat(messages, model)
+    """Call the configured LLM provider and parse tool calls when supported."""
+    if not _provider_ready():
+        return (None, [])
+
+    target_model = model or _resolved_model()
+    provider = _provider_name()
+    if provider == "ollama":
+        content = _ollama_chat(messages, target_model)
         return (content, []) if content else (None, [])
 
-    base = (settings.LLM_BASE_URL or "https://api.openai.com").rstrip("/")
-    path = "/chat/completions" if settings.LLM_PROVIDER == "deepseek" else "/v1/chat/completions"
-    url = base + path
-    headers = {"Authorization": f"Bearer {settings.LLM_API_KEY or ''}", "Content-Type": "application/json"}
-    payload = {"model": model, "messages": messages, "tools": tools}
+    base = _compatible_base_url()
+    url = base + _chat_completions_path(base)
+    headers = {
+        "Authorization": f"Bearer {settings.LLM_API_KEY or ''}",
+        "Content-Type": "application/json",
+    }
+    payload = {"model": target_model, "messages": messages, "tools": tools}
 
     try:
         with httpx.Client(timeout=90.0) as client:
-            r = client.post(url, headers=headers, json=payload)
-            r.raise_for_status()
-            data = r.json()
-        msg = data.get("choices", [{}])[0].get("message", {})
-        content = msg.get("content") or ""
-        raw_tool_calls = msg.get("tool_calls") or []
+            response = client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        message = data.get("choices", [{}])[0].get("message", {})
+        content = message.get("content") or ""
+        raw_tool_calls = message.get("tool_calls") or []
         tool_calls = []
-        for tc in raw_tool_calls:
-            fn = tc.get("function", {})
-            args_str = fn.get("arguments", "{}")
+        for raw_call in raw_tool_calls:
+            function_call = raw_call.get("function", {})
+            arguments_raw = function_call.get("arguments", "{}")
             try:
-                args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                arguments = json.loads(arguments_raw) if isinstance(arguments_raw, str) else arguments_raw
             except json.JSONDecodeError:
-                args = {}
-            tool_calls.append({
-                "id": tc.get("id", ""),
-                "name": fn.get("name", ""),
-                "arguments": args,
-            })
+                arguments = {}
+            tool_calls.append(
+                {
+                    "id": raw_call.get("id", ""),
+                    "name": function_call.get("name", ""),
+                    "arguments": arguments,
+                }
+            )
         return (content.strip() if content else None, tool_calls)
-    except Exception as e:
+    except Exception as exc:
         import traceback
-        logger.warning("LLM tools 调用失败: %s\n%s", str(e), traceback.format_exc())
-        print(f"[LLM] tools 调用失败: {e}")
+
+        logger.warning("LLM tool request failed: %s\n%s", str(exc), traceback.format_exc())
+        print(f"[LLM] tool request failed: {exc}")
         return (None, [])

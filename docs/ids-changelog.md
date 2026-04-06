@@ -5,6 +5,10 @@ whenever IDS behavior, event handling, detector sources, demo isolation, or
 security-center workflows change.
 
 Spec references:
+- `specs/006-ids-live-security-center/`
+- `specs/007-ids-source-real-sync/`
+- `specs/008-ids-runtime-activated-packages/`
+- `specs/009-ids-upload-evidence-chain/`
 - `specs/010-ids-strict-ai-log-audit/`
 
 ## Working Rules
@@ -50,6 +54,15 @@ Spec references:
   - `cd frontend && npm run build`
   - PowerShell syntax parse passed for `start-ids-dev.ps1` and
     `stop-ids-dev.ps1`
+- Documentation sync for the still-open IDS branch package:
+  - refreshed `README.md` so the shipped security-center slice now explicitly
+    mentions `/security/log-audit`, request-side runtime matching, upload trace
+    in IDS reports, and rule-package provenance at runtime,
+  - refreshed `docs/ids-demo-script.md` so the setup includes the log-audit
+    page and the demo flow now has a runtime-request extension after source
+    activation,
+  - kept the Spec Kit trail aligned by referencing the active `006` through
+    `010` IDS specs in this changelog before pushing the remaining branch work.
 - Current note:
   - the stop script still keeps the fallback port scan for older demo sessions
     launched before PID tracking existed, but the main path is now precise

@@ -197,6 +197,12 @@ export const routes: RouteRecordRaw[] = [
             meta: { title: 'IDS 入侵检测', hideInMenu: true, roles: ['system_admin'] },
           },
           {
+            path: 'log-audit',
+            name: 'SecurityLogAudit',
+            component: () => import('@/views/security/SecurityLogAudit.vue'),
+            meta: { title: 'IDS 日志审计', hideInMenu: true, roles: ['system_admin'] },
+          },
+          {
             path: 'situation',
             name: 'SecuritySituation',
             component: () => import('@/views/security/SecuritySituation.vue'),

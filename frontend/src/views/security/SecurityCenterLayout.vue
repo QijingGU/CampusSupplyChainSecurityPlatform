@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Lock, Monitor, ArrowLeft, FolderOpened } from '@element-plus/icons-vue'
+import { Lock, Monitor, ArrowLeft, FolderOpened, Document } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -9,6 +9,7 @@ const loading = ref(true)
 
 const navItems = [
   { path: '/security/ids', label: 'IDS 入侵检测', icon: Lock },
+  { path: '/security/log-audit', label: 'IDS 日志审计', icon: Document },
   { path: '/security/situation', label: '安全态势感知', icon: Monitor },
   { path: '/security/sandbox', label: '安全沙箱', icon: FolderOpened },
 ]
@@ -21,15 +22,31 @@ function goBack() {
 function goTo(path: string) {
   if (route.path === path) return
   loading.value = true
-  router.push(path)
+  void router.push(path)
 }
 
 const isActive = (path: string) => route.path === path || route.path.startsWith(path + '/')
 
 let loadTimer: ReturnType<typeof setTimeout> | null = null
+const restartLoading = () => {
+  if (loadTimer) clearTimeout(loadTimer)
+  loading.value = true
+  loadTimer = setTimeout(() => {
+    loading.value = false
+    loadTimer = null
+  }, 280)
+}
+
+watch(
+  () => route.fullPath,
+  () => {
+    restartLoading()
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   document.body.classList.add('security-center-active')
-  loadTimer = setTimeout(() => { loading.value = false }, 280)
 })
 onBeforeUnmount(() => {
   document.body.classList.remove('security-center-active')

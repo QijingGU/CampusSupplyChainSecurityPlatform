@@ -1,5 +1,67 @@
 import request from './request'
 
+export interface IDSUploadAuditTrace {
+  verdict: string
+  risk_level: string
+  confidence: number
+  summary: string
+  provider?: string
+  analysis_mode?: string
+  analysis_mode_label?: string
+  llm_used?: boolean
+  ai_available?: boolean
+  recommended_actions?: string[]
+}
+
+export interface IDSUploadIndicator {
+  code: string
+  detail: string
+}
+
+export interface IDSUploadTrace {
+  saved_as: string
+  file_name: string
+  sha256?: string
+  size?: number
+  storage_location?: string
+  indicator_count?: number
+  indicators?: IDSUploadIndicator[]
+  audit: IDSUploadAuditTrace
+}
+
+export type IDSLogAuditSeverity = 'informational' | 'suspicious' | 'critical' | string
+
+export interface IDSLogAuditItem {
+  id: number
+  user_name: string
+  user_role: string
+  action: string
+  target_type: string
+  target_id: string
+  detail: string
+  severity: IDSLogAuditSeverity
+  metadata?: Record<string, string | number | null>
+  created_at: string | null
+}
+
+export interface IDSLogAuditSummary {
+  total: number
+  critical?: number
+  suspicious?: number
+  informational?: number
+  by_action?: { action: string; count: number }[]
+  by_target_type?: { target_type: string; count: number }[]
+}
+
+export interface IDSLogAuditResponse {
+  items: IDSLogAuditItem[]
+  total: number
+  summary?: IDSLogAuditSummary
+  available_actions?: string[]
+  available_targets?: string[]
+  available_severities?: IDSLogAuditSeverity[]
+}
+
 export interface IDSEventItem {
   id: number
   client_ip: string
@@ -31,6 +93,7 @@ export interface IDSEventItem {
   action_taken?: string
   response_result?: string
   response_detail?: string
+  upload_trace?: IDSUploadTrace | null
   risk_score?: number
   confidence?: number
   hit_count?: number
@@ -55,6 +118,50 @@ export interface IDSStatsResponse {
   by_origin?: { event_origin: string; count: number }[]
 }
 
+export interface IDSSituationAttackItem {
+  id: string
+  timestamp: string
+  source_ip: string
+  source_location: {
+    country: string
+    city: string
+    lat: number
+    lng: number
+    derived?: boolean
+  }
+  target_ip: string
+  target_location: {
+    lat: number
+    lng: number
+  }
+  attack_type: string
+  severity: string
+  status: string
+  blocked: boolean
+  detector_name: string
+  uptime: string
+}
+
+export interface IDSSituationResponse {
+  generated_at: string
+  scope: string
+  disclaimer: string
+  target: {
+    lat: number
+    lng: number
+    city: string
+    country: string
+    ip: string
+  }
+  metrics: {
+    total_blocked: number
+    active_threats: number
+    uptime_seconds: number
+    online_sources: number
+  }
+  attacks: IDSSituationAttackItem[]
+}
+
 export function listIDSEvents(params?: {
   attack_type?: string
   client_ip?: string
@@ -68,6 +175,10 @@ export function listIDSEvents(params?: {
   offset?: number
 }) {
   return request.get<IDSEventsResponse>('/ids/events', { params })
+}
+
+export function getIDSEvent(eventId: number) {
+  return request.get<{ item: IDSEventItem }>(`/ids/events/${eventId}`)
 }
 
 export function getIDSStats(params?: { event_origin?: string; source_classification?: string }) {
@@ -89,6 +200,9 @@ export interface IDSSourceSyncAttemptItem {
   result_status: string
   detail: string
   freshness_after_sync: string
+  package_version: string
+  package_intake_id?: number | null
+  resolved_sync_endpoint?: string
   triggered_by: string
 }
 
@@ -103,6 +217,10 @@ export interface IDSSourcePackageIntakeItem {
   provenance_note: string
   intake_result: string
   intake_detail: string
+  artifact_path?: string
+  artifact_sha256?: string
+  artifact_size_bytes?: number
+  rule_count?: number
   triggered_by: string
   created_at: string | null
 }
@@ -114,6 +232,10 @@ export interface IDSSourcePackagePreviewItem {
   version_change_state: string
   changed_fields: string[]
   visible_warning: string
+  artifact_path?: string
+  artifact_sha256?: string
+  artifact_size_bytes?: number
+  rule_count?: number
 }
 
 export interface IDSSourceItem {
@@ -125,6 +247,7 @@ export interface IDSSourceItem {
   operational_status: string
   freshness_target_hours: number
   sync_mode: string
+  sync_endpoint: string
   last_synced_at: string | null
   last_sync_status: string
   last_sync_detail: string
@@ -165,6 +288,7 @@ export interface IDSSourceRegistryPayload {
   operational_status: string
   freshness_target_hours: number
   sync_mode: string
+  sync_endpoint?: string
   provenance_note?: string
 }
 
@@ -175,6 +299,14 @@ export interface IDSSourceSyncResponse {
   health_state: string
   last_synced_at: string | null
   detail: string
+  package_version?: string
+  package_intake_id?: number | null
+  resolved_sync_endpoint?: string
+  activation_required?: boolean
+  rule_count?: number
+  artifact_path?: string
+  artifact_sha256?: string
+  change_summary?: string
   source: IDSSourceItem
 }
 
@@ -249,6 +381,10 @@ export function getIDSTrend(
   })
 }
 
+export function getIDSSituation() {
+  return request.get<IDSSituationResponse>('/ids/situation')
+}
+
 export function listIDSSources() {
   return request.get<IDSSourceListResponse>('/ids/sources')
 }
@@ -315,24 +451,18 @@ export function getIDSEventReport(eventId: number, forceAI?: boolean) {
   })
 }
 
+export interface IDSLogAuditListParams {
+  action?: string
+  target_type?: string
+  user_name?: string
+  severity?: IDSLogAuditSeverity
+  limit?: number
+  offset?: number
+}
+
+export function listIDSLogAudits(params?: IDSLogAuditListParams) {
+  return request.get<IDSLogAuditResponse>('/ids/log-audit', { params })
+}
+
 /** 主标题彩蛋：多向量并发攻击聚合研判报告 */
 // Aggregate report for the seeded phase1 demo chain.
-export function getIDSPhase1AggregateReport() {
-  return request.get<{ report: any }>('/ids/demo/phase1/aggregate-report')
-}
-
-export function seedIDSDemoPhase1(autoAnalyze = true) {
-  return request.post<{ code: number; message: string; event_ids: number[] }>('/ids/demo/phase1', {
-    auto_analyze: autoAnalyze,
-  })
-}
-
-export function seedIDSDemoPhase2(autoAnalyze = true) {
-  return request.post<{ code: number; message: string; event_id: number }>('/ids/demo/phase2', {
-    auto_analyze: autoAnalyze,
-  })
-}
-
-export function resetIDSDemoEvents() {
-  return request.post<{ code: number; message: string; deleted: number }>('/ids/demo/reset')
-}

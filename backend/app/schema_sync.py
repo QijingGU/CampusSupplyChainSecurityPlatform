@@ -6,6 +6,20 @@ from .models.ids_source_package import IDSSourcePackageActivation, IDSSourcePack
 
 
 SCHEMA_PATCHES: dict[str, dict[str, str]] = {
+    "ids_sources": {
+        "sync_endpoint": "VARCHAR(255)",
+    },
+    "ids_source_sync_attempts": {
+        "package_version": "VARCHAR(64)",
+        "package_intake_id": "INTEGER",
+        "resolved_sync_endpoint": "VARCHAR(255)",
+    },
+    "ids_source_package_intakes": {
+        "artifact_path": "VARCHAR(255)",
+        "artifact_sha256": "VARCHAR(64)",
+        "artifact_size_bytes": "INTEGER",
+        "rule_count": "INTEGER",
+    },
     "ids_events": {
         "event_origin": "VARCHAR(16)",
         "source_classification": "VARCHAR(32)",
@@ -118,6 +132,10 @@ def _ensure_ids_source_package_intake_source_nullable(conn, engine):
                 provenance_note TEXT,
                 intake_result VARCHAR(32) NOT NULL,
                 intake_detail TEXT,
+                artifact_path VARCHAR(255),
+                artifact_sha256 VARCHAR(64),
+                artifact_size_bytes INTEGER,
+                rule_count INTEGER,
                 triggered_by VARCHAR(64),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(source_id) REFERENCES ids_sources (id)
@@ -127,12 +145,14 @@ def _ensure_ids_source_package_intake_source_nullable(conn, engine):
             INSERT INTO ids_source_package_intakes__new (
                 id, source_id, source_key, package_version, release_timestamp,
                 trust_classification, detector_family, provenance_note,
-                intake_result, intake_detail, triggered_by, created_at
+                intake_result, intake_detail, artifact_path, artifact_sha256,
+                artifact_size_bytes, rule_count, triggered_by, created_at
             )
             SELECT
                 id, source_id, source_key, package_version, release_timestamp,
                 trust_classification, detector_family, provenance_note,
-                intake_result, intake_detail, triggered_by, created_at
+                intake_result, intake_detail, artifact_path, artifact_sha256,
+                artifact_size_bytes, rule_count, triggered_by, created_at
             FROM ids_source_package_intakes
         """))
         conn.execute(text("DROP TABLE ids_source_package_intakes"))

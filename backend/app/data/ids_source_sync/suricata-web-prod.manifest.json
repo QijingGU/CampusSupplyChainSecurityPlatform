@@ -1,0 +1,9 @@
+{
+  "source_key": "suricata-web-prod",
+  "package_version": "2026.04.06",
+  "release_timestamp": "2026-04-06T09:00:00Z",
+  "trust_classification": "external_mature",
+  "detector_family": "web",
+  "provenance_note": "Reviewed local mirror of mature web attack rules for security-center sync validation.",
+  "artifact_path": "app/data/ids_source_sync/suricata-web-prod.rules"
+}

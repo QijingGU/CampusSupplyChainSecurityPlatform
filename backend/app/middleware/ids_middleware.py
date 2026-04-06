@@ -68,6 +68,13 @@ class IDSMiddleware(BaseHTTPMiddleware):
         confidence = int(detection.get("confidence") or 0)
         hit_count = int(detection.get("hit_count") or 0)
         detect_detail = str(detection.get("detect_detail") or "")
+        source_classification = str(detection.get("source_classification") or SOURCE_TRANSITIONAL_LOCAL)
+        detector_family = str(detection.get("detector_family") or "web")
+        detector_name = str(detection.get("detector_name") or "inline_request_matcher")
+        source_rule_id = str(detection.get("source_rule_id") or signature_matched[:128])
+        source_rule_name = str(detection.get("source_rule_name") or attack_type)
+        source_version = str(detection.get("source_version") or "legacy-inline")
+        source_freshness = str(detection.get("source_freshness") or "current")
         blocked = 0
         firewall_rule = ""
         should_block = risk_score >= int(settings.IDS_BLOCK_THRESHOLD)
@@ -126,13 +133,13 @@ class IDSMiddleware(BaseHTTPMiddleware):
             apply_source_metadata(
                 evt,
                 event_origin=REAL_EVENT_ORIGIN,
-                source_classification=SOURCE_TRANSITIONAL_LOCAL,
-                detector_family="web",
-                detector_name="inline_request_matcher",
-                source_rule_id=signature_matched[:128],
-                source_rule_name=attack_type,
-                source_version="legacy-inline",
-                source_freshness="current",
+                source_classification=source_classification[:32],
+                detector_family=detector_family[:32],
+                detector_name=detector_name[:64],
+                source_rule_id=source_rule_id[:128],
+                source_rule_name=source_rule_name[:128],
+                source_version=source_version[:64],
+                source_freshness=source_freshness[:16],
             )
             db.add(evt)
             db.commit()

@@ -8,13 +8,44 @@ export interface UploadSecurityAlert {
   detail?: string
 }
 
+export type UploadState = 'accepted' | 'quarantined'
+export type UploadAuditVerdict = 'pass' | 'review' | 'quarantine' | 'accepted' | 'quarantined'
+export type QuarantineRiskLevel = 'high' | 'medium' | 'low'
+export type UploadAuditRiskLevel = QuarantineRiskLevel | 'unknown'
+
+export interface UploadAuditResult {
+  generated_at?: string
+  engine?: string
+  provider?: string
+  analysis_mode?: string
+  mode_reason?: string
+  llm_used?: boolean
+  llm_available?: boolean
+  ai_available?: boolean
+  verdict: UploadAuditVerdict
+  risk_level: UploadAuditRiskLevel
+  confidence: number
+  summary: string
+  evidence?: string[]
+  reasons?: string[]
+  recommended_action?: string
+  recommended_actions?: string[]
+  heuristic_risk_level?: UploadAuditRiskLevel
+  heuristic_verdict?: UploadAuditVerdict
+  static_risk_level?: QuarantineRiskLevel
+  linked_event_id?: number | null
+}
+
 export interface UploadResult {
   ok: boolean
   filename: string
   saved_as: string
   size: number
-  url: string
-  /** 存在时：上传已成功落盘，但应展示安全演示告警（非成功 Toast） */
+  url?: string | null
+  upload_state?: UploadState
+  quarantined?: boolean
+  stored_in?: 'accepted' | 'quarantine'
+  audit: UploadAuditResult
   security_alert?: UploadSecurityAlert
 }
 
@@ -24,23 +55,51 @@ export function publicUpload(file: File) {
   return request.post<UploadResult>('/upload', form)
 }
 
-export type QuarantineRiskLevel = 'high' | 'medium' | 'low'
+export type UploadAuditMode = 'static_only' | 'llm_assisted'
+
+export interface UploadAuditRuntimeStatus {
+  status: string
+  ids_ai_analysis_enabled: boolean
+  llm_configured: boolean
+  llm_provider: string
+  llm_model: string
+  llm_required_field: string
+  llm_base_url?: string | null
+  ids_upload_audit_mode: UploadAuditMode
+  ids_upload_audit_label: string
+  ids_upload_audit_message: string
+  ids_upload_audit_mode_reason?: string
+  ids_upload_ai_active?: boolean
+}
+
+export function getUploadAuditRuntime(): Promise<UploadAuditRuntimeStatus> {
+  return request.get('/health') as Promise<UploadAuditRuntimeStatus>
+}
 
 export interface QuarantineItem {
   saved_as: string
+  original_name?: string
+  file_name?: string
   size: number
   modified_at: string
-  url: string
+  url?: string | null
   risk_level?: QuarantineRiskLevel
   extension?: string
-  /** 前端演示：未落盘，仅内存中的模拟捕获 */
-  local_only?: boolean
+  has_report?: boolean
+  report_generated_at?: string | null
+  report_risk_level?: QuarantineRiskLevel | null
+  audit_verdict?: UploadAuditVerdict | null
+  report_verdict?: UploadAuditVerdict | null
+  audit_confidence?: number | null
+  audit_summary?: string | null
 }
 
 export interface QuarantineAnalysis {
   total_bytes: number
   today_count: number
   week_count: number
+  ai_quarantined_count?: number
+  audit_hold_count?: number
   high_risk_count: number
   medium_risk_count: number
   by_extension: { ext: string; count: number }[]
@@ -50,17 +109,65 @@ export interface QuarantineAnalysis {
   generated_at: string
 }
 
+export interface QuarantinePhaseLog {
+  phase: string
+  message: string
+}
+
+export interface QuarantineReportSection {
+  title: string
+  body: string
+}
+
+export interface QuarantineReportIndicator {
+  code: string
+  detail: string
+}
+
+export interface QuarantineAnalysisReport {
+  saved_as: string
+  file_name: string
+  original_name?: string
+  generated_at: string
+  last_updated_at?: string
+  analysis_generated_at?: string | null
+  size: number
+  extension: string
+  sha256: string
+  risk_level: QuarantineRiskLevel
+  indicator_count: number
+  indicators: QuarantineReportIndicator[]
+  storage_location?: string
+  analysis_source?: string
+  audit: UploadAuditResult
+  sections: QuarantineReportSection[]
+}
+
 export interface QuarantineListResponse {
   items: QuarantineItem[]
   count: number
   analysis?: QuarantineAnalysis
+  latest_report?: QuarantineAnalysisReport | null
+}
+
+export interface QuarantineAnalyzeResponse {
+  saved_as: string
+  logs: QuarantinePhaseLog[]
+  report: QuarantineAnalysisReport | null
 }
 
 export function listQuarantineFiles(): Promise<QuarantineListResponse> {
-  // 拦截器已解包 res.data，与 axios 默认泛型不一致
   return request.get('/upload/quarantine') as Promise<QuarantineListResponse>
 }
 
 export function deleteQuarantineFile(savedAs: string) {
   return request.delete<{ ok: boolean }>(`/upload/quarantine/${encodeURIComponent(savedAs)}`)
+}
+
+export function analyzeQuarantineFiles(savedAs?: string): Promise<QuarantineAnalyzeResponse> {
+  return request.post('/upload/quarantine/analyze', savedAs ? { saved_as: savedAs } : {}) as Promise<QuarantineAnalyzeResponse>
+}
+
+export function getQuarantineReport(savedAs: string): Promise<QuarantineAnalysisReport> {
+  return request.get(`/upload/quarantine/${encodeURIComponent(savedAs)}/report`) as Promise<QuarantineAnalysisReport>
 }
