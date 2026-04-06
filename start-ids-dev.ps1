@@ -92,24 +92,24 @@ function Get-LiveProcessEntriesFromState {
     $entries = New-Object System.Collections.Generic.List[object]
 
     if (-not (Test-Path $processStatePath)) {
-        return $entries
+        return ,$entries
     }
 
     try {
         $state = Get-Content -Path $processStatePath -Raw | ConvertFrom-Json
         foreach ($proc in @($state.processes)) {
-            $pid = 0
-            if (-not ([int]::TryParse([string]$proc.pid, [ref]$pid) -and $pid -gt 0)) {
+            $procId = 0
+            if (-not ([int]::TryParse([string]$proc.pid, [ref]$procId) -and $procId -gt 0)) {
                 continue
             }
 
-            if (-not (Get-Process -Id $pid -ErrorAction SilentlyContinue)) {
+            if (-not (Get-Process -Id $procId -ErrorAction SilentlyContinue)) {
                 continue
             }
 
             $entries.Add([pscustomobject]@{
                 name = [string]$proc.name
-                pid = $pid
+                pid = $procId
                 port = if ($null -ne $proc.port) { [int]$proc.port } else { 0 }
                 working_directory = [string]$proc.working_directory
                 kind = [string]$proc.kind
@@ -119,7 +119,7 @@ function Get-LiveProcessEntriesFromState {
         Write-Host ("[launcher] Failed to read existing process state file {0}: {1}" -f $processStatePath, $_.Exception.Message) -ForegroundColor Yellow
     }
 
-    return $entries
+    return ,$entries
 }
 
 function Save-ProcessState {
@@ -130,12 +130,14 @@ function Save-ProcessState {
         [bool]$BackendReused
     )
 
+    $processArray = @($Processes | ForEach-Object { $_ })
+
     $state = [pscustomobject]@{
         updated_at = (Get-Date).ToString('s')
         backend_port = $BackendPort
         frontend_port = $FrontendPort
         backend_reused = $BackendReused
-        processes = @($Processes)
+        processes = $processArray
     }
 
     $state |
@@ -220,6 +222,17 @@ function Read-SecretPlainText {
     }
 }
 
+function Read-HostText {
+    param([string]$Prompt)
+
+    $value = Read-Host -Prompt $Prompt
+    if ($null -eq $value) {
+        return ''
+    }
+
+    return [string]$value
+}
+
 function Get-LaunchAiSelection {
     param([string]$EnvPath)
 
@@ -234,10 +247,12 @@ function Get-LaunchAiSelection {
     Write-Host 'AI launch selection' -ForegroundColor Cyan
     if ($envValues.ContainsKey('LLM_API_KEY') -and [string]::IsNullOrWhiteSpace([string]$envValues['LLM_API_KEY']) -eq $false) {
         $currentModel = if ($envValues.ContainsKey('LLM_MODEL')) { [string]$envValues['LLM_MODEL'] } else { '' }
-        Write-Host ("- Existing backend/.env AI config detected: provider={0} model={1}" -f $defaultProvider, ($currentModel -or '<default>')) -ForegroundColor DarkCyan
+        $modelLabel = if ([string]::IsNullOrWhiteSpace($currentModel)) { '<default>' } else { $currentModel }
+        Write-Host ("- Existing backend/.env AI config detected: provider={0} model={1}" -f $defaultProvider, $modelLabel) -ForegroundColor DarkCyan
     }
 
-    $enableAi = (Read-Host 'Enable AI audit for this launch? [y/N]').Trim().ToLower()
+    $enableAi = Read-HostText -Prompt 'Enable AI audit for this launch? [y/N]'
+    $enableAi = $enableAi.Trim().ToLower()
     if ($enableAi -notin @('y', 'yes')) {
         return @{
             skip_prompt = '1'
@@ -249,7 +264,8 @@ function Get-LaunchAiSelection {
         }
     }
 
-    $providerInput = (Read-Host ("Choose provider [{0}] (deepseek/kimi)" -f $defaultProvider)).Trim().ToLower()
+    $providerInput = Read-HostText -Prompt ("Choose provider [{0}] (deepseek/kimi)" -f $defaultProvider)
+    $providerInput = $providerInput.Trim().ToLower()
     if (-not $providerInput) {
         $providerInput = $defaultProvider
     }
@@ -258,7 +274,12 @@ function Get-LaunchAiSelection {
         $providerInput = $defaultProvider
     }
 
-    $apiKey = (Read-SecretPlainText -Prompt ("Enter {0} API Key" -f $providerInput)).Trim()
+    $apiKey = Read-SecretPlainText -Prompt ("Enter {0} API Key" -f $providerInput)
+    if ($null -eq $apiKey) {
+        $apiKey = ''
+    }
+    $apiKey = [string]$apiKey
+    $apiKey = $apiKey.Trim()
     if (-not $apiKey) {
         Write-Host '[launcher] Empty API key entered. This launch will use static audit mode.' -ForegroundColor Yellow
         return @{

@@ -35,6 +35,17 @@ Spec references:
     gone,
   - `README.md` and `docs/ids-demo-script.md` now document the stop command and
     the new process-state file behavior.
+- Follow-up fix on the same day for the quick-start regression:
+  - fixed `start-ids-dev.ps1` so an empty previous-process list no longer
+    collapses to `$null` before `Add(...)`,
+  - fixed state serialization so the recorded process list is written as a real
+    array instead of tripping over `Generic.List` expansion,
+  - fixed both start/stop scripts to avoid the PowerShell built-in `PID`
+    variable name collision while reading recorded process IDs,
+  - direct regression validation confirmed one quick-start run now prints both
+    `Backend window started` and `Frontend window started`, writes
+    `.ids-dev-processes.json`, and the stop script consumes that state file on
+    shutdown instead of dropping straight to fallback scan mode.
 - Validation for this slice:
   - `cd frontend && npm run build`
   - PowerShell syntax parse passed for `start-ids-dev.ps1` and

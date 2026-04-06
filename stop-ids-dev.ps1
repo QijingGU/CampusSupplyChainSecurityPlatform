@@ -16,9 +16,9 @@ function Get-TrackedProcessIdsFromState {
     try {
         $state = Get-Content -Path $processStatePath -Raw | ConvertFrom-Json
         foreach ($proc in @($state.processes)) {
-            $pid = 0
-            if ([int]::TryParse([string]$proc.pid, [ref]$pid) -and $pid -gt 0) {
-                [void]$ids.Add($pid)
+            $procId = 0
+            if ([int]::TryParse([string]$proc.pid, [ref]$procId) -and $procId -gt 0) {
+                [void]$ids.Add($procId)
             }
         }
     } catch {
