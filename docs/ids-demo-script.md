@@ -20,6 +20,9 @@ Show one real end-to-end chain:
   asks for the AI launch mode before opening the backend window, auto-picks
   backend port `8166` or `8167`, and initializes `backend/supply_chain.db` if
   it does not exist yet.
+- Quick start also writes `.ids-dev-processes.json` so `stop-ids-dev.bat` /
+  `powershell -ExecutionPolicy Bypass -File .\stop-ids-dev.ps1` can close the
+  exact demo windows and child processes after the session.
 - Backend running on `127.0.0.1:8166` or `127.0.0.1:8167`
 - Frontend running on `127.0.0.1:5173` or `127.0.0.1:5174`
 - Admin account ready: `system_admin / 123456`
@@ -101,6 +104,8 @@ Show one real end-to-end chain:
 **Expected Result**
 
 - The UI shows a withheld result.
+- The page stays in the quarantined state only; it should not also show a fake
+  `上传审计执行失败 / 网络错误` panel for the same upload.
 - The dialog shows verdict, risk level, and confidence.
 - No public accepted-file URL is returned.
 
@@ -190,6 +195,8 @@ Show one real end-to-end chain:
 **Expected Result**
 
 - The audience sees one coherent workflow instead of disconnected demo pages.
+- After the demo, run `stop-ids-dev.bat` so the quick-started frontend/backend
+  windows and their child processes are closed together.
 
 ## Backup Talking Points
 

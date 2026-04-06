@@ -35,6 +35,10 @@ build/
 backend/supply_chain.db
 backend/data/
 backend/uploads/
+backend/quarantine_uploads/
+backend/upload_reports/
+tmp/
+.ids-dev-processes.json
 
 # ========== IDE ==========
 .idea/
@@ -47,3 +51,4 @@ backend/uploads/
 *.log
 logs/
 npm-debug.log*
+.gstack/

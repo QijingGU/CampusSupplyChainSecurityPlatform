@@ -15,6 +15,35 @@ Spec references:
 - Push the active IDS branch to GitHub at the end of the day after updating this
   file, unless an unresolved conflict blocks the push.
 
+## 2026-04-07
+
+- Fixed the public upload result-state bug in
+  `frontend/src/views/upload/PublicUpload.vue`:
+  - quarantined uploads now stay in the quarantined state after the audit
+    dialog closes,
+  - closing the Element Plus dialog no longer sends the same request through the
+    outer error path and paints a fake `上传审计执行失败 / 网络错误` panel on top of a
+    real quarantine result,
+  - rejected requests now explicitly clear `lastResult` before showing the
+    error panel so upload outcomes do not mix across states.
+- Tightened the Windows quick-start lifecycle:
+  - `start-ids-dev.ps1` now uses `Start-Process -PassThru` and records the
+    quick-started backend/frontend wrapper PowerShell PIDs in
+    `.ids-dev-processes.json`,
+  - `stop-ids-dev.ps1` now stops recorded quick-start processes first and only
+    falls back to the old port / command-line scan when the recorded PIDs are
+    gone,
+  - `README.md` and `docs/ids-demo-script.md` now document the stop command and
+    the new process-state file behavior.
+- Validation for this slice:
+  - `cd frontend && npm run build`
+  - PowerShell syntax parse passed for `start-ids-dev.ps1` and
+    `stop-ids-dev.ps1`
+- Current note:
+  - the stop script still keeps the fallback port scan for older demo sessions
+    launched before PID tracking existed, but the main path is now precise
+    process-state shutdown instead of pure heuristics.
+
 ## 2026-04-06
 
 - Closed the upload-to-IDS evidence-chain gap inside the active security-center
