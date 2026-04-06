@@ -4,6 +4,9 @@ This file tracks day-by-day IDS work for the campus security center. Update it
 whenever IDS behavior, event handling, detector sources, demo isolation, or
 security-center workflows change.
 
+Spec references:
+- `specs/010-ids-strict-ai-log-audit/`
+
 ## Working Rules
 
 - Add a dated entry on every active development day.
@@ -11,6 +14,79 @@ security-center workflows change.
 - Mention affected areas, current risks, and the next step when relevant.
 - Push the active IDS branch to GitHub at the end of the day after updating this
   file, unless an unresolved conflict blocks the push.
+
+## 2026-04-06
+
+- Closed the upload-to-IDS evidence-chain gap inside the active security-center
+  workflow:
+  - quarantined upload incidents now persist richer evidence payloads including
+    `sha256`, file size, and storage location in the IDS event trace,
+  - `GET /api/ids/events/{event_id}/report` now returns a structured
+    `upload_trace` block and includes `Upload Audit Trace` in the generated
+    markdown report,
+  - `frontend/src/views/security/SecurityIDS.vue` now shows upload-audit
+    evidence in the event drawer and adds a direct `打开沙箱报告` jump for
+    upload-gated incidents,
+  - `frontend/src/views/security/SecuritySandbox.vue` now supports route-based
+    deep links so `/security/sandbox?saved_as=<sample>&report=1` opens the
+    targeted persisted report instead of dropping the operator into a generic
+    list view.
+- Validation for the evidence-chain slice:
+  - `python -m py_compile backend/app/api/ids.py backend/app/api/upload.py`
+  - `cd frontend && npm run build`
+  - direct backend validation confirmed the latest `upload_ai_gate` incident now
+    serializes `saved_as=ab45cc6b_codex-webshell.php`,
+    `audit_verdict=quarantine`, `audit_risk_level=high`, and a non-empty
+    `upload_trace`,
+  - direct report validation confirmed `get_event_report(...)` includes
+    `report.upload_trace` and the markdown `Upload Audit Trace` section.
+- Residual scope after this slice:
+  - the report modal now carries the upload trace in markdown/report payloads,
+    but the visual report cover remains optimized for generic IDS incidents.
+
+- Closed the biggest remaining flower-rack in `frontend/src/views/security/SecurityIDS.vue` by making IDS source sync real instead of status-only.
+- Backend changes for the real sync slice:
+  - added `sync_endpoint` to IDS source records,
+  - added sync-attempt metadata for `package_version`, `package_intake_id`, and resolved manifest path,
+  - added package-intake artifact fields for `artifact_path`, `artifact_sha256`, `artifact_size_bytes`, and `rule_count`,
+  - added `backend/app/services/ids_source_sync.py` to load and validate local manifest files,
+  - replaced the old `Metadata refresh completed.` sync stub with real manifest/artifact intake.
+- Frontend changes for the real sync slice:
+  - source create/edit now captures `sync_endpoint`,
+  - the IDS source row shows the saved manifest path,
+  - latest sync state now exposes imported package version plus resolved manifest path,
+  - latest package preview now exposes `rules=<n>` and a shortened SHA-256,
+  - the history dialog now includes a `Sync Audit` section so sync attempts and package intake can be reviewed together.
+- Added deterministic review fixtures:
+  - `backend/app/data/ids_source_sync/suricata-web-prod.manifest.json`
+  - `backend/app/data/ids_source_sync/suricata-web-prod.rules`
+- Validation for this slice:
+  - `python -m py_compile backend/app/api/ids.py backend/app/models/ids_source.py backend/app/models/ids_source_package.py backend/app/schema_sync.py backend/app/services/ids_source_packages.py backend/app/services/ids_source_sync.py`
+  - `cd frontend && npm run build`
+  - direct API validation confirmed `suricata-web-prod` sync returns `package_version=2026.04.06`, `rule_count=4`, the artifact path, and persisted SHA-256 metadata,
+  - gstack browser validation confirmed `/security/ids` now shows the sync endpoint, allows `执行同步`, and records a second sync attempt plus a second artifact-backed intake row.
+- Residual scope after this slice:
+  - `sync_mode=scheduled` still means scheduler-managed metadata, not an in-app cron implementation,
+  - `demo`/`test` incident tooling and the legacy `IDSManage.vue` compatibility surface still remain outside this slice.
+
+- Follow-up backend closure on the same day:
+  - `backend/app/services/ids_engine.py` now loads the latest activated `web` package artifacts from trusted, non-disabled sources into a bounded runtime cache,
+  - `backend/app/middleware/ids_middleware.py` now persists runtime-matched events with the activated source metadata instead of always writing `inline_request_matcher / legacy-inline`,
+  - `backend/app/api/ids.py` now refreshes the runtime cache after source updates and package activations so operator changes take effect promptly.
+- Validation for the runtime closure:
+  - `python -m py_compile backend/app/services/ids_engine.py backend/app/middleware/ids_middleware.py backend/app/api/ids.py`
+  - direct runtime validation confirmed `scan_request_detailed("GET", "/runtime-probe", "sample=../", ...)` returns `detector_name=suricata-web-prod`, `source_version=2026.04.06`, and `source_rule_id=9001003`,
+  - direct HTTP validation confirmed `GET /runtime-probe?sample=../` persisted an IDS event with `source_classification=external_mature` and the same activated package metadata while still returning normal application control flow (`404` in the validation environment).
+- Additional residual scope for the runtime bridge:
+  - only activated `web` artifacts currently feed the lightweight runtime matcher, and the parser only extracts `content:"..."` tokens rather than executing a full Suricata engine.
+- Final cleanup and operator-flow closure on the same day:
+  - removed the remaining demo trigger entry points from the active `frontend/src/views/security/SecurityIDS.vue` reviewer page so the security-center IDS surface now stays on real incidents, real source sync, real package activation, and real upload evidence,
+  - added direct navigation from `frontend/src/views/security/SecurityLogAudit.vue` into `/security/sandbox?saved_as=...&report=1` and `/security/ids?event=...&report=1`, closing the audit-to-evidence loop for upload and IDS actions,
+  - updated `frontend/src/api/request.ts` and `docs/ids-demo-script.md` so the local startup path explicitly supports backend port `8166` or `8167` and the demo script uses the real IDS audit action names such as `ids_upload_quarantine`,
+  - added root quick-start launchers `start-ids-dev.ps1` and `start-ids-dev.bat` so Windows demos can open backend/frontend in separate windows, preserve the interactive DeepSeek/Kimi startup prompt, auto-select `8166/8167`, and initialize `backend/supply_chain.db` when it is missing,
+  - updated `README.md` and `docs/ids-demo-script.md` to make the quick-start launcher the preferred IDS demo boot path,
+  - simplified the AI startup interaction so operators now only choose `deepseek` or `kimi` and paste the API key, while the system auto-fills the provider base URL and default model name,
+  - moved the interactive AI choice into `start-ids-dev.ps1` so each quick-start launch explicitly asks again even when `backend/.env` already contains a saved key, while the backend process itself receives the selected mode as startup flags.
 
 ## 2026-04-01
 
@@ -288,3 +364,85 @@ security-center workflows change.
     `c405c79 feat: complete ids source package intake workflow`,
   - pushed `security-center/feature-ids` to GitHub so the branch is ready for a
     PR into `security-center/collab-setup`.
+
+## 2026-04-05
+
+- Started a new Spec Kit parity slice at
+  `specs/006-ids-live-security-center/` focused on replacing the most visible
+  demo-heavy security-center behaviors with backend-driven workflows.
+- Implemented backend parity endpoints:
+  - added real quarantine-analysis reporting in `backend/app/api/upload.py`
+    with persisted sidecar report metadata for quarantined files,
+  - added `GET /api/ids/situation` in `backend/app/api/ids.py` so the situation
+    page can render real incident-driven telemetry instead of random attacks.
+- Updated frontend API contracts:
+  - aligned `frontend/src/api/upload.ts` with the real quarantine analysis and
+    latest-report payloads,
+  - extended `frontend/src/api/ids.ts` with the live situation response shape.
+- Reworked the two security-center pages with the largest demo gap:
+  - `frontend/src/views/security/SecuritySandbox.vue` now runs the real backend
+    quarantine analysis flow and reloads persisted report metadata instead of
+    relying on synthetic `local_only` samples,
+  - `frontend/src/views/security/SecuritySituation.vue` was rebuilt to poll
+    `GET /api/ids/situation`, render real counters and recent events, and label
+    map coordinates as IP-derived approximations rather than exact geo
+    intelligence.
+- Validation:
+  - backend `python -m py_compile backend/app/api/upload.py backend/app/api/ids.py` passes,
+  - frontend `npm install` completed in `frontend/`,
+  - frontend `npm run build` passes after the sandbox/situation parity changes.
+- Manual QA replayed the control loop on 2026-04-05:
+  - gstack browse uploaded `tmp/codex-webshell.php`, which returned the “文件已扣留到安全沙箱” banner, generated an IDS event linked to `detector_name=upload_ai_gate`, and made the sample row, AI verdict, and persisted report visible in `/security/sandbox` plus `/security/situation`.
+  - `/security/sandbox` now reuses the persisted report when the drawer opens, showing verdict, risk, confidence, SHA-256, and indicator list, while `/security/situation` fetched `GET /api/ids/situation` output such as `累计阻断攻击 1`, `当前活跃威胁 1`, and the `127.0.0.1 ... WebShell ... upload_ai_gate` attack card derived from the real incident.
+  - gstack browse also uploaded the benign `tmp/codex-note.txt` sample, which showed the accepted UI state, emitted a normal public URL, and never appeared in the sandbox.
+- Remaining gap after this slice:
+  - IDS source sync in the security-center source panel still remains a lighter
+    metadata workflow rather than a full external mature-source sync process.
+  - `frontend/src/views/security/SecurityIDS.vue` is still the active IDS page,
+    but it intentionally retains demo/test helpers such as demo event filters,
+    demo injection, and `demo_test` package visibility.
+  - `frontend/src/views/ids/IDSManage.vue` remains a legacy compatibility page
+    and is not the current security-center workflow.
+- Follow-up sync for the same slice:
+  - `frontend/src/views/upload/PublicUpload.vue` is now part of the shipped IDS
+    story and shows real AI upload verdicts instead of demo-only warning copy.
+  - backend validation also includes
+    `backend/app/services/upload_ai_audit.py`.
+  - a later local replay through gstack confirmed the current counts reached
+    `累计阻断攻击 2` and `当前活跃威胁 2` after another quarantined WebShell upload,
+    while `tmp/codex-note.txt` still passed and returned a public accepted-file
+    URL.
+
+## 2026-04-06 (Mode Clarification)
+
+- Updated IDS upload behavior to explicit dual-mode audit:
+  - if API key/LLM config is missing, uploads still run under clearly labeled `static_only` audit mode,
+  - if API key/LLM config is present, uploads run under `llm_assisted` AI-enhanced mode.
+- Added provider path for external model testing:
+  - startup prompt now supports `deepseek` and `kimi`,
+  - default provider preference is now `deepseek`, while `kimi` can be selected interactively at startup.
+- Updated startup expectation:
+  - before service starts, operator is prompted whether to input/update `LLM_API_KEY` or `LLM_BASE_URL` now,
+  - choosing not to configure at boot keeps the platform in static audit mode instead of blocking upload workflows.
+- Scope reminder for this update:
+  - `/security/log-audit` remains part of the shipped IDS workflow and audit chain,
+  - `frontend/src/views/security/SecuritySituation.vue` remains out of scope and unchanged in this round.
+
+## 2026-04-07
+
+- Note: This historical strict-gate entry is superseded by `2026-04-06 (Mode Clarification)` above, which defines the current behavior (`static_only` without key, `llm_assisted` with key).
+
+- Hardened the AI upload gate with strict validation:
+  - `backend/app/services/upload_ai_audit.py` no longer returns fallback heuristics; missing LLM configuration or invalid responses now surface as outright rejections so every verdict truly comes from the configured AI provider,
+  - the startup hook in `backend/app/main.py` now prompts the operator before spinning up to ask whether to enter or refresh `LLM_API_KEY` / `LLM_BASE_URL`, and `/api/health` now reports `llm_configured` via the same `is_llm_available()` logic that gates uploads,
+  - `docs/ids-demo-script.md` calls out the pre-launch configuration step and makes clear that the upload gate is intentionally strict (the Security Situation page remains untouched by this slice).
+- Added an IDS-only audit trail and UI surface:
+  - backend audit logging now records upload gating, source sync/activation, analysis queues, and manual IDS actions so the new `/security/log-audit` view can explain what changed, who touched it, and when,
+  - the security-center navigation links directly to that page so operators can filter by action, risk, and timestamp without leaving the IDS workflow.
+- Finished the real-content cleanup on the active IDS reviewer page:
+  - `frontend/src/views/security/SecurityIDS.vue` no longer carries hidden demo trigger buttons, aggregate demo reports, or the demo-only evidence timeline dialog,
+  - the page now stays on real incidents, real source/package operations, real upload evidence, and jump links into the sandbox,
+  - remaining non-production package classifications are still persisted as `demo_test` internally for compatibility, but the reviewer-facing text now presents them as `实验室验证` instead of demo wording.
+- Documented the real upload state machine:
+  - the public upload experience now communicates upload → AI audit → decision states clearly and surfaces explicit errors when the gate rejects a file because AI is not configured,
+  - `specs/010-ids-strict-ai-log-audit/` captures the constitution, plan, and task breakdown for this “dual-mode upload audit + startup prompt + log audit + live upload flow” change so reviewers can trace the shipped behavior.
