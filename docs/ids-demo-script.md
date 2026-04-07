@@ -112,6 +112,10 @@ Show one real end-to-end chain:
 - The upload result explains why the file was held and whether the verdict came
   from `static_only` or `llm_assisted` mode.
 - No public accepted-file URL is returned.
+- If a `system_admin` session is already open, the global IDS popup should
+  appear within one polling cycle for the new high-risk upload event and show
+  `关闭` / `今日不再弹出` / `跳转 IDS 页面`. Non-admin sessions should not
+  receive the popup.
 
 ## Scene 4 - Show The Sandbox
 
@@ -206,6 +210,10 @@ Show one real end-to-end chain:
 ## Backup Talking Points
 
 - Safe files still work, the system is not blocking everything.
+- The admin-only high-risk popup is sourced from the same blocked/unarchived
+  IDS queue shown in `/security/ids`; closing one alert will not immediately
+  spam the operator because queued popups are rate-limited to one every 10
+  seconds, and `今日不再弹出` suppresses the rest of the day for that browser.
 - Format-aware audit now distinguishes real document/image containers from suspicious binary payloads, so normal `docx/png/pdf` uploads are not blocked just because they are binary files.
 - `review` and `quarantine` both enter the sandbox, so operators can hold and
   inspect suspicious uploads before release.

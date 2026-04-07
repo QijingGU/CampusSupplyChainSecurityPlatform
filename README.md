@@ -66,6 +66,10 @@ auto-selects backend port `8166` or `8167`, initializes
 `backend/supply_chain.db` if needed, asks the AI launch choice before the
 backend window starts, and starts the frontend on `5173` or `5174`.
 
+For local browser development, the frontend now auto-probes backend
+`8166/8167` directly even when Vite runs on `5173/5174`, so the stack still
+comes up when the preferred port is occupied.
+
 When quick start launches the stack it also records the wrapper PowerShell PIDs
 into `.ids-dev-processes.json`, so the stop script can close the exact windows
 and their child processes instead of guessing by port only.
@@ -96,6 +100,7 @@ The security-center upload, IDS, log-audit, sandbox, and situation pages now dri
 - The request-side runtime matcher now treats activated trusted `web` packages as the real static interception source. The bundled ET Open subset currently validates `.env` disclosure probes, cookie-based `UNION SELECT`, `${jndi:ldap://...}` log4j payloads, XSS probes such as `/proxy.php?url=<script>...`, and path-traversal/file-disclosure requests such as `fetchLogFiles` / `../`.
 - Matching requests persist detector provenance, matched-rule detail, rule id/name/version, and a sanitized `Attack Packet` view, then return real HTTP `403` responses when the ET Open rule weight crosses `IDS_BLOCK_THRESHOLD`.
 - Blocked request events can run optional AI analysis when AI is configured. The event detail/report surface now separates `Matched Static Rules`, `Attack Packet`, `Decision Source`, and AI analysis mode instead of presenting one blended demo summary.
+- `system_admin` now receives an admin-only global high-risk IDS popup whenever a new blocked, unarchived event scores `>= 80`, including upload quarantine incidents. The popup offers `关闭`, `今日不再弹出`, and `跳转 IDS 页面`, enforces a 10-second interval between queued alerts, and stays hidden from non-admin roles.
 - Sandbox reports now explain why a file was held, which static indicators matched, whether the decision came from static rules or `llm_assisted` mode, which IDS event it linked to, and what follow-up actions the reviewer should take.
 - The sandbox analysis produces IDS metrics that the situation page consumes through `GET /api/ids/situation`, so `/security/situation` renders counters, recent incident cards, and IP-derived map arcs instead of random animation data.
 - IDS source operations on `/security/ids` now use a real local-manifest sync path instead of the old metadata-only stub. Each sync-backed source stores `sync_endpoint`, and `POST /api/ids/sources/{id}/sync` reads the bundled manifest/rule artifact, computes version, rule count, artifact path, and SHA-256, then records both Sync Audit and package-intake history for the UI.

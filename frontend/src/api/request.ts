@@ -8,6 +8,7 @@ const devBaseCandidates = [
   'http://127.0.0.1:8166/api',
   'http://127.0.0.1:8167/api',
 ]
+const shouldAutoPickDevBase = import.meta.env.DEV && (!directBaseURL || directBaseURL === '/api')
 
 // 鍐呯綉绌块€忥細闈炴湰鏈鸿闂椂寮哄埗鐢?/api锛岄伩鍏嶈姹傚彂鍒拌闂€呯殑 127.0.0.1
 function isLocalAccess(): boolean {
@@ -16,7 +17,7 @@ function isLocalAccess(): boolean {
   return host === 'localhost' || host === '127.0.0.1'
 }
 
-let resolvedBaseURL: string | null = directBaseURL || (import.meta.env.DEV ? null : '/api')
+let resolvedBaseURL: string | null = shouldAutoPickDevBase ? null : (directBaseURL || (import.meta.env.DEV ? null : '/api'))
 let resolvingBaseURL: Promise<string> | null = null
 
 async function pickDevBaseURL() {

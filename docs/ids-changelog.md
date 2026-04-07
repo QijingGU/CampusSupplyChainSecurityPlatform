@@ -72,6 +72,39 @@ Spec references:
   - `cd frontend && npm run build`
   - PowerShell syntax parse passed for `start-ids-dev.ps1` and
     `stop-ids-dev.ps1`
+- Closed the admin high-risk warning loop and the blocked local-dev path on the
+  same day:
+  - `frontend/src/components/layout/AppLayout.vue` now polls blocked,
+    unarchived IDS events scoring `>= 80` and shows an admin-only global popup
+    with `关闭` / `今日不再弹出` / `跳转 IDS 页面`,
+  - the popup queue deduplicates already-seen events per day, enforces a
+    10-second interval between queued alerts, and includes upload quarantine
+    incidents because they already enter the IDS queue as blocked high-risk
+    events,
+  - `frontend/src/api/request.ts` now treats dev-time `/api` as a signal to
+    probe `8166/8167` directly for local browser sessions, instead of pinning
+    the frontend to the Vite proxy target,
+  - `backend/app/config.py` now allows `5174` and `8167` in local CORS origins,
+    and `backend/app/middleware/ids_middleware.py` now bypasses `OPTIONS`
+    preflight requests so real browser auth/dashboard traffic is not broken by
+    IDS inspection,
+  - `backend/app/services/ids_engine.py` now skips incomplete runtime tokens
+    such as bare `://`, derives a stricter Log4j projection
+    (`${` + `jndi` + `://`) for the ET rules that depend on `pcre`, and
+    whitelists the real login path `/api/user/login` so credentials are not
+    dragged into IDS alert generation.
+- Validation for the admin-alert + local-dev repair:
+  - `python -m py_compile backend/app/config.py backend/app/middleware/ids_middleware.py backend/app/services/ids_engine.py`
+  - `cd frontend && npm run build`
+  - direct engine validation confirmed normal `/api/user/login` and
+    `/api/dashboard` traffic no longer match IDS, while
+    `GET /login?user=${jndi:ldap://demo/a}` still matches `jndi_injection`
+    at score `100`,
+  - Playwright browser validation on `2026-04-07` confirmed:
+    `system_admin` sees the popup, `关闭` waits out the 10-second gap before the
+    next queued event, `今日不再弹出` suppresses the rest of the day for that
+    browser, `跳转 IDS 页面` lands on the targeted report route, and
+    `logistics_admin` does not receive the popup.
 - Documentation sync for the still-open IDS branch package:
   - refreshed `README.md` so the shipped security-center slice now explicitly
     mentions `/security/log-audit`, request-side runtime matching, upload trace

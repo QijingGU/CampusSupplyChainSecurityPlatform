@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElNotification, ElMessageBox } from 'element-plus'
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
 import { useUserStore } from '@/stores/user'
 import { useNoticeStore } from '@/stores/notice'
 import { getAndClearWarningToLogistics, clearWarningToLogistics } from '@/stores/demo'
+import { listIDSEvents } from '@/api/ids'
+import type { IDSEventItem } from '@/api/ids'
 import { listPurchases } from '@/api/purchase'
 import { listSupplierOrders } from '@/api/supplier'
 import { listMyPurchases } from '@/api/purchase'
 
 const route = useRoute()
+const router = useRouter()
 const userStore = useUserStore()
 const noticeStore = useNoticeStore()
 const sidebarCollapsed = ref(false)
@@ -24,11 +27,239 @@ const immersiveScreen = computed(() => {
 
 const pageTitle = computed(() => (route.meta?.title as string) || '')
 const role = computed(() => userStore.userInfo?.role as string)
+const isSystemAdmin = computed(() => role.value === 'system_admin')
 
 let pollingTimer: number | null = null
 const prevCounts: Record<string, number> = {}
 
 const POLL_INTERVAL = 25000
+const IDS_ALERT_POLL_INTERVAL = 10000
+const IDS_ALERT_POPUP_GAP = 10000
+const IDS_ALERT_MIN_SCORE = 80
+const IDS_ALERT_STATE_KEY = 'ids-admin-high-risk-alert-v1'
+const idsRiskAlertVisible = ref(false)
+const idsRiskAlertCurrent = ref<IDSEventItem | null>(null)
+const idsRiskAlertQueue = ref<IDSEventItem[]>([])
+let idsAlertPollingTimer: number | null = null
+let idsAlertScheduleTimer: number | null = null
+let idsAlertLastShownAt = 0
+
+type IDSAlertState = {
+  date: string
+  muted_for_today: boolean
+  seen_event_ids: number[]
+}
+
+function currentDateKey() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = `${now.getMonth() + 1}`.padStart(2, '0')
+  const d = `${now.getDate()}`.padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function defaultIdsAlertState(): IDSAlertState {
+  return {
+    date: currentDateKey(),
+    muted_for_today: false,
+    seen_event_ids: [],
+  }
+}
+
+function readIdsAlertState(): IDSAlertState {
+  try {
+    const raw = localStorage.getItem(IDS_ALERT_STATE_KEY)
+    if (!raw) return defaultIdsAlertState()
+    const parsed = JSON.parse(raw) as Partial<IDSAlertState> | null
+    if (!parsed || parsed.date !== currentDateKey()) return defaultIdsAlertState()
+    return {
+      date: parsed.date || currentDateKey(),
+      muted_for_today: Boolean(parsed.muted_for_today),
+      seen_event_ids: Array.isArray(parsed.seen_event_ids)
+        ? parsed.seen_event_ids
+            .map((item) => Number(item))
+            .filter((item) => Number.isFinite(item) && item > 0)
+            .slice(0, 200)
+        : [],
+    }
+  } catch {
+    return defaultIdsAlertState()
+  }
+}
+
+function writeIdsAlertState(state: IDSAlertState) {
+  localStorage.setItem(IDS_ALERT_STATE_KEY, JSON.stringify(state))
+}
+
+function isIdsAlertMutedToday() {
+  return readIdsAlertState().muted_for_today
+}
+
+function hasSeenIdsAlert(eventId?: number | null) {
+  if (!eventId) return false
+  return readIdsAlertState().seen_event_ids.includes(eventId)
+}
+
+function markIdsAlertSeen(eventId?: number | null) {
+  if (!eventId) return
+  const state = readIdsAlertState()
+  if (!state.seen_event_ids.includes(eventId)) {
+    state.seen_event_ids = [...state.seen_event_ids, eventId].slice(-200)
+    writeIdsAlertState(state)
+  }
+}
+
+function muteIdsAlertsForToday() {
+  const state = readIdsAlertState()
+  state.muted_for_today = true
+  writeIdsAlertState(state)
+}
+
+function resetIdsAlertStateForToday() {
+  writeIdsAlertState(defaultIdsAlertState())
+}
+
+function idsAlertAttackTitle(item?: IDSEventItem | null) {
+  if (!item) return '高危安全事件'
+  if (item.path === '/api/upload' || item.upload_trace) return '高危文件上传攻击'
+  return item.attack_type_label || item.attack_type || '高危安全事件'
+}
+
+function idsAlertDetector(item?: IDSEventItem | null) {
+  return item?.source_rule_name || item?.detector_name || item?.firewall_rule || '-'
+}
+
+function idsAlertEvidence(item?: IDSEventItem | null) {
+  return (
+    item?.upload_trace?.decision_basis?.hold_reason_summary ||
+    item?.response_detail ||
+    item?.review_note ||
+    item?.ai_analysis ||
+    item?.signature_matched ||
+    '-'
+  )
+}
+
+function clearIdsAlertSchedule() {
+  if (idsAlertScheduleTimer) {
+    clearTimeout(idsAlertScheduleTimer)
+    idsAlertScheduleTimer = null
+  }
+}
+
+function stopIdsAlertPolling() {
+  if (idsAlertPollingTimer) {
+    clearInterval(idsAlertPollingTimer)
+    idsAlertPollingTimer = null
+  }
+  clearIdsAlertSchedule()
+}
+
+function showNextIdsAlert(force = false) {
+  clearIdsAlertSchedule()
+  if (!isSystemAdmin.value || isIdsAlertMutedToday() || idsRiskAlertVisible.value || idsRiskAlertCurrent.value) return
+  if (!idsRiskAlertQueue.value.length) return
+  const delay = force ? 0 : Math.max(0, idsAlertLastShownAt + IDS_ALERT_POPUP_GAP - Date.now())
+  if (delay > 0) {
+    idsAlertScheduleTimer = window.setTimeout(() => {
+      idsAlertScheduleTimer = null
+      showNextIdsAlert(true)
+    }, delay)
+    return
+  }
+  const next = idsRiskAlertQueue.value.shift() || null
+  if (!next) return
+  idsRiskAlertCurrent.value = next
+  idsRiskAlertVisible.value = true
+  idsAlertLastShownAt = Date.now()
+  markIdsAlertSeen(next.id)
+}
+
+function dismissIdsRiskAlert() {
+  idsRiskAlertCurrent.value = null
+  showNextIdsAlert()
+}
+
+function handleIdsRiskAlertClose() {
+  idsRiskAlertVisible.value = false
+}
+
+async function handleIdsRiskAlertJump() {
+  const eventId = idsRiskAlertCurrent.value?.id
+  idsRiskAlertVisible.value = false
+  if (!eventId) return
+  await router.push({ path: '/security/ids', query: { event: String(eventId), report: '1' } })
+}
+
+function handleIdsRiskAlertMuteToday() {
+  muteIdsAlertsForToday()
+  idsRiskAlertQueue.value = []
+  idsRiskAlertVisible.value = false
+}
+
+function queueIdsRiskAlerts(items: IDSEventItem[], options?: { silent?: boolean }) {
+  if (!isSystemAdmin.value || isIdsAlertMutedToday()) return
+  const queuedIds = new Set<number>([
+    ...(idsRiskAlertCurrent.value?.id ? [idsRiskAlertCurrent.value.id] : []),
+    ...idsRiskAlertQueue.value.map((item) => item.id),
+  ])
+  const freshItems: IDSEventItem[] = []
+  for (const item of items) {
+    const eventId = Number(item?.id || 0)
+    if (!eventId || queuedIds.has(eventId) || hasSeenIdsAlert(eventId)) continue
+    queuedIds.add(eventId)
+    freshItems.push(item)
+  }
+  if (!freshItems.length) return
+  idsRiskAlertQueue.value = [...idsRiskAlertQueue.value, ...freshItems].slice(0, 8)
+  if (!options?.silent) {
+    ElNotification({
+      title: '高危 IDS 风险预警',
+      message: `检测到 ${freshItems.length} 条新的高危安全事件，请立即复核。`,
+      type: 'error',
+      duration: 4000,
+    })
+  }
+  showNextIdsAlert()
+}
+
+async function refreshAdminIdsRiskAlerts(options?: { silent?: boolean }) {
+  if (!isSystemAdmin.value) {
+    idsRiskAlertQueue.value = []
+    idsRiskAlertVisible.value = false
+    idsRiskAlertCurrent.value = null
+    return
+  }
+  if (readIdsAlertState().date !== currentDateKey()) {
+    resetIdsAlertStateForToday()
+  }
+  if (isIdsAlertMutedToday()) return
+  try {
+    const res: any = await listIDSEvents({
+      blocked: 1,
+      archived: 0,
+      min_score: IDS_ALERT_MIN_SCORE,
+      limit: 8,
+    })
+    const items: IDSEventItem[] = Array.isArray(res?.items)
+      ? res.items
+      : Array.isArray(res?.data?.items)
+        ? res.data.items
+        : []
+    queueIdsRiskAlerts(items.filter((item) => (item.risk_score || 0) >= IDS_ALERT_MIN_SCORE), options)
+  } catch {
+    /* keep silent for global polling */
+  }
+}
+
+function startIdsAlertPolling() {
+  stopIdsAlertPolling()
+  if (!isSystemAdmin.value) return
+  void refreshAdminIdsRiskAlerts({ silent: true })
+  idsAlertPollingTimer = window.setInterval(() => {
+    void refreshAdminIdsRiskAlerts()
+  }, IDS_ALERT_POLL_INTERVAL)
+}
 
 function notifyIfIncreased(key: string, count: number, title: string, message: string, type: 'warning' | 'info' | 'success' = 'warning') {
   const prev = prevCounts[key] ?? 0
@@ -229,8 +460,10 @@ watch(
 
 onMounted(async () => {
   await refreshAll({ silent: true })
+  await refreshAdminIdsRiskAlerts({ silent: true })
   await markCurrentAsSeen()
   startPolling()
+  startIdsAlertPolling()
   initLogisticsWarningCheck()
 })
 
@@ -238,6 +471,7 @@ watch(
   () => route.path,
   async () => {
     await markCurrentAsSeen()
+    showNextIdsAlert()
   }
 )
 
@@ -245,12 +479,15 @@ watch(
   () => userStore.userInfo?.id,
   async () => {
     await refreshAll({ silent: true })
+    await refreshAdminIdsRiskAlerts({ silent: true })
     startPolling()
+    startIdsAlertPolling()
   }
 )
 
 onBeforeUnmount(() => {
   stopPolling()
+  stopIdsAlertPolling()
   syncImmersiveBodyClass(false)
 })
 </script>
@@ -273,6 +510,62 @@ onBeforeUnmount(() => {
         </Transition>
       </main>
     </div>
+
+    <el-dialog
+      v-model="idsRiskAlertVisible"
+      title="高危 IDS 风险预警"
+      width="520px"
+      class="ids-risk-alert-dialog"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      append-to-body
+      @closed="dismissIdsRiskAlert"
+    >
+      <template v-if="idsRiskAlertCurrent">
+        <div class="ids-risk-alert">
+          <div class="ids-risk-alert__headline">
+            <span class="ids-risk-alert__badge">HIGH</span>
+            <div>
+              <div class="ids-risk-alert__title">{{ idsAlertAttackTitle(idsRiskAlertCurrent) }}</div>
+              <div class="ids-risk-alert__subtitle">
+                事件 #{{ idsRiskAlertCurrent.id }}，风险分 {{ idsRiskAlertCurrent.risk_score ?? '-' }}，来源 {{ idsAlertDetector(idsRiskAlertCurrent) }}
+              </div>
+            </div>
+          </div>
+
+          <div class="ids-risk-alert__grid">
+            <div class="ids-risk-alert__item">
+              <span class="ids-risk-alert__label">客户端 IP</span>
+              <span class="ids-risk-alert__value">{{ idsRiskAlertCurrent.client_ip || '-' }}</span>
+            </div>
+            <div class="ids-risk-alert__item">
+              <span class="ids-risk-alert__label">事件时间</span>
+              <span class="ids-risk-alert__value">{{ idsRiskAlertCurrent.created_at || '-' }}</span>
+            </div>
+            <div class="ids-risk-alert__item ids-risk-alert__item--full">
+              <span class="ids-risk-alert__label">请求目标</span>
+              <span class="ids-risk-alert__value">{{ idsRiskAlertCurrent.method }} {{ idsRiskAlertCurrent.path || '-' }}</span>
+            </div>
+            <div class="ids-risk-alert__item ids-risk-alert__item--full">
+              <span class="ids-risk-alert__label">拦截依据</span>
+              <span class="ids-risk-alert__value ids-risk-alert__value--multiline">{{ idsAlertEvidence(idsRiskAlertCurrent) }}</span>
+            </div>
+          </div>
+
+          <div class="ids-risk-alert__hint">
+            {{ idsRiskAlertQueue.length ? `队列中还有 ${idsRiskAlertQueue.length} 条高危事件，弹窗最短间隔 10 秒。` : '这是当前最新一条待处理高危事件。' }}
+          </div>
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="ids-risk-alert__actions">
+          <el-button @click="handleIdsRiskAlertClose">关闭</el-button>
+          <el-button @click="handleIdsRiskAlertMuteToday">今日不再弹出</el-button>
+          <el-button type="danger" @click="handleIdsRiskAlertJump">跳转 IDS 页面</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -328,5 +621,160 @@ onBeforeUnmount(() => {
 .page-leave-to {
   opacity: 0;
   transform: translateY(-8px);
+}
+
+:deep(.ids-risk-alert-dialog) {
+  .el-dialog {
+    border: 1px solid rgba(255, 107, 107, 0.32);
+    background:
+      radial-gradient(circle at top right, rgba(255, 107, 107, 0.18), transparent 38%),
+      linear-gradient(180deg, rgba(10, 20, 38, 0.98), rgba(7, 12, 25, 0.98));
+    box-shadow:
+      0 22px 60px rgba(0, 0, 0, 0.45),
+      0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+    color: #ecf4ff;
+  }
+
+  .el-dialog__header {
+    margin-right: 0;
+    padding: 18px 22px 0;
+  }
+
+  .el-dialog__title {
+    color: #f8fbff;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .el-dialog__headerbtn .el-dialog__close {
+    color: rgba(236, 244, 255, 0.72);
+  }
+
+  .el-dialog__body {
+    padding: 18px 22px 10px;
+  }
+
+  .el-dialog__footer {
+    padding: 8px 22px 22px;
+  }
+}
+
+.ids-risk-alert {
+  display: grid;
+  gap: 18px;
+}
+
+.ids-risk-alert__headline {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(135, 16, 16, 0.42), rgba(61, 14, 18, 0.84));
+  border: 1px solid rgba(255, 129, 129, 0.22);
+}
+
+.ids-risk-alert__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  height: 32px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #ff6b6b, #ff8748);
+  color: #fff9f6;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.ids-risk-alert__title {
+  color: #fdfefe;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.ids-risk-alert__subtitle {
+  margin-top: 6px;
+  color: rgba(236, 244, 255, 0.78);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.ids-risk-alert__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ids-risk-alert__item {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  padding: 14px 15px;
+  border-radius: 16px;
+  background: rgba(12, 20, 36, 0.88);
+  border: 1px solid rgba(150, 177, 216, 0.16);
+}
+
+.ids-risk-alert__item--full {
+  grid-column: 1 / -1;
+}
+
+.ids-risk-alert__label {
+  color: rgba(168, 188, 214, 0.82);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ids-risk-alert__value {
+  color: #f4f8ff;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.ids-risk-alert__value--multiline {
+  white-space: pre-wrap;
+}
+
+.ids-risk-alert__hint {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(68, 84, 117, 0.2);
+  color: rgba(211, 223, 240, 0.92);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.ids-risk-alert__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .ids-risk-alert__headline {
+    flex-direction: column;
+  }
+
+  .ids-risk-alert__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ids-risk-alert__actions {
+    flex-direction: column-reverse;
+  }
+
+  .ids-risk-alert__actions :deep(.el-button) {
+    width: 100%;
+    margin-left: 0;
+  }
 }
 </style>

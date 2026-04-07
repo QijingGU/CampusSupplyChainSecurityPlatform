@@ -49,12 +49,14 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24h
 
     # CORS（开发/演示放宽，生产请收紧）
-    # 通过 Nginx 同源部署时无需修改；同一局域网可加 http://本机IP:80 或 :5173
+    # 通过 Nginx 同源部署时无需修改；同一局域网可加 http://本机IP:80 或 :5173/:5174
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173", "http://127.0.0.1:5173",
+        "http://localhost:5174", "http://127.0.0.1:5174",
         "http://localhost:4173", "http://127.0.0.1:4173",  # vite preview
         "http://localhost:8080", "http://127.0.0.1:8080",  # Docker Nginx
         "http://localhost:8166", "http://127.0.0.1:8166",  # 同源直连
+        "http://localhost:8167", "http://127.0.0.1:8167",  # 同源直连备用端口
         "http://localhost", "http://127.0.0.1",  # 小皮 80 端口
     ]
 

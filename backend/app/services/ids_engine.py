@@ -57,6 +57,7 @@ SIGNATURES: list[tuple[str, str, int]] = [
 WHITELIST_PATHS = {
     "/api/health",
     "/api/auth/login",
+    "/api/user/login",
     "/api/purchase/my",  # 教师「我的申请」接口，避免误拦
     "/api/upload",  # 匿名上传：由业务层返回 403 模拟木马拦截，避免 IDS 抢先阻断
     "/",
@@ -210,6 +211,8 @@ def _extract_runtime_rules_from_text_line(
     nocase = "nocase" in rule_text.lower()
     patterns = _normalize_runtime_patterns(contents)
     if not patterns:
+        patterns = _derive_runtime_patterns(rule_text, rule_name)
+    if not patterns:
         return []
 
     signature_preview = " && ".join(patterns[:3])[:96]
@@ -270,11 +273,54 @@ def _looks_generic_runtime_token(value: str) -> bool:
     lowered = token.lower()
     if not token:
         return True
-    if lowered in {"get", "post", "head", "put", "patch", "delete", "options", "trace", "connect", "cookie:", "cookie", "host:", "user-agent:"}:
+    if lowered in {
+        "get",
+        "post",
+        "head",
+        "put",
+        "patch",
+        "delete",
+        "options",
+        "trace",
+        "connect",
+        ":",
+        "${",
+        "%7b",
+        "%24%7b",
+        "cookie:",
+        "cookie",
+        "host:",
+        "user-agent:",
+        "://",
+        "http://",
+        "https://",
+    }:
         return True
     if len(token) < 3 and token not in {"..", "../", "./"}:
         return True
+    if not any(ch.isalnum() for ch in token) and token not in {"..", "../", "./"}:
+        return True
     return False
+
+
+def _derive_runtime_patterns(rule_text: str, rule_name: str) -> list[str]:
+    lowered = f"{rule_name} {rule_text}".lower()
+    if "log4j" in lowered or "jndi" in lowered:
+        derived: list[str] = []
+        for token in (
+            "${jndi:",
+            "${env:",
+            "%7bjndi%3a",
+            "${lower:j",
+            "${upper:j",
+            ":-j}${",
+            "/tomcatbypass/command/base64/",
+            "aws_access_key_id",
+        ):
+            if token in lowered and token not in derived:
+                derived.append(token)
+        return derived
+    return []
 
 
 def _unescape_suricata_string(value: str) -> str:

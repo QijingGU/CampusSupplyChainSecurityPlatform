@@ -33,10 +33,10 @@ class IDSMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         client_ip = _get_client_ip(request)
         path = request.url.path
-        if is_whitelisted(path):
+        method = request.method
+        if method == "OPTIONS" or is_whitelisted(path):
             return await call_next(request)
 
-        method = request.method
         query = str(request.query_params)
         headers = dict(request.headers)
         user_agent = headers.get("user-agent", "")
