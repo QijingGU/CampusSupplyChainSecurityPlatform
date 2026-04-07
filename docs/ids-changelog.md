@@ -59,6 +59,14 @@ Spec references:
     per-day seen list, so historical unarchived high-risk incidents are not
     replayed again as fresh alerts after a page reload, browser restart, or day
     change,
+  - follow-up hardening on the same branch extended that watermark to use
+    `created_at + id`, so a local `init_db.py` reset or fresh demo database no
+    longer suppresses new administrator popups just because the browser still
+    remembered a larger event id from an older run,
+  - the frontend now also persists `user-info` and restores `/api/user/info`
+    during bootstrap when only the token survived a refresh, so `AppLayout`
+    keeps the administrator role after reload and the IDS popup poller does not
+    silently stop running,
   - if the operator is already on `/security/ids`, the popup action now keeps
     the route in place and emits an in-page focus event instead of pushing a
     new `?event=...&report=1` route that forced another report run,
@@ -71,6 +79,23 @@ Spec references:
     event `#117`, the next queued popup for event `#116` appeared immediately,
     and the imported custom warning sound played for both popups (`media=2` in
     the browser audio probe).
+- Closed the refreshed-session admin-alert regression on the same day:
+  - root cause: `frontend/src/stores/user.ts` only kept the JWT in
+    `localStorage`; after a browser refresh the in-memory `userInfo.role`
+    disappeared, so `frontend/src/components/layout/AppLayout.vue` no longer
+    satisfied the `system_admin` gate and the IDS admin polling loop stopped
+    silently even though new blocked upload incidents were still being created,
+  - `frontend/src/stores/user.ts` now persists the authenticated user profile
+    in `localStorage` and restores it when the store initializes,
+  - `frontend/src/main.ts` now rehydrates the current user from
+    `GET /api/user/info` when a token exists but no in-memory profile is
+    present, so old sessions and refreshes both recover without requiring a
+    manual relogin,
+  - live browser validation on 2026-04-08 rechecked the broken path end to end:
+    after logging in as `system_admin`, reloading the page, and uploading a
+    malicious PHP sample, the frontend kept `user-info` in local storage,
+    advanced the IDS popup watermark to event `#147`, and rendered a visible
+    `高危 IDS 风险预警` dialog for the new quarantined upload event.
 
 
 ## 2026-04-07
@@ -630,4 +655,3 @@ Spec references:
   - `backend/app/services/ids_engine.py` now filters low-signal Log4j/JNDI Suricata tokens during runtime-pattern derivation so normal internal requests such as `/api/user/login` or `/api/ids/events` no longer trip `jndi_injection` by accident, while real payloads such as `${jndi:ldap://...}` still match and block,
   - `frontend/src/api/request.ts` now chooses the backend probe order from the current Vite port, preferring `8167` when the frontend is running on `5174/4174`, and uses direct `fetch(.../health)` probing so local dev does not silently fall back to the wrong backend,
   - the admin-only popup queue in `frontend/src/components/layout/AppLayout.vue` was revalidated with real upload incidents instead of seed data: two quarantined PHP uploads produced IDS events `#77` and `#76`, `system_admin` received the second popup about `10.67s` after closing the first, and `logistics_admin` still received no popup during a 12-second watch after a later high-risk upload event.
-

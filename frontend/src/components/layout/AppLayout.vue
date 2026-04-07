@@ -58,6 +58,7 @@ let idsAlertAudioPrimed = false
 type IDSAlertState = {
   muted_date: string | null
   watermark_event_id: number
+  watermark_created_at: string | null
 }
 
 function currentDateKey() {
@@ -72,6 +73,7 @@ function defaultIdsAlertState(): IDSAlertState {
   return {
     muted_date: null,
     watermark_event_id: 0,
+    watermark_created_at: null,
   }
 }
 
@@ -106,6 +108,10 @@ function readIdsAlertState(): IDSAlertState {
       muted_date: mutedDate,
       watermark_event_id:
         Number.isFinite(watermarkEventId) && watermarkEventId > 0 ? watermarkEventId : 0,
+      watermark_created_at:
+        typeof parsed?.watermark_created_at === 'string' && parsed.watermark_created_at.trim()
+          ? parsed.watermark_created_at
+          : null,
     }
   } catch {
     return defaultIdsAlertState()
@@ -125,11 +131,64 @@ function eventIdOfIdsAlert(item?: IDSEventItem | null) {
   return Number.isFinite(eventId) && eventId > 0 ? eventId : 0
 }
 
-function advanceIdsAlertWatermark(eventIds: number[]) {
-  if (!eventIds.length) return
-  const latestEventId = Math.max(...eventIds)
-  if (!Number.isFinite(latestEventId) || latestEventId <= 0) return
+function eventCreatedAtMsOfIdsAlert(item?: IDSEventItem | null) {
+  const raw = String(item?.created_at || '').trim()
+  if (!raw) return 0
+  const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T')
+  const parsed = Date.parse(normalized)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function watermarkCreatedAtMs(state: IDSAlertState) {
+  const raw = String(state.watermark_created_at || '').trim()
+  if (!raw) return 0
+  const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T')
+  const parsed = Date.parse(normalized)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function isIdsAlertNewerThanWatermark(item: IDSEventItem, state: IDSAlertState) {
+  const eventId = eventIdOfIdsAlert(item)
+  if (!eventId) return false
+  const eventCreatedAtMs = eventCreatedAtMsOfIdsAlert(item)
+  const currentWatermarkCreatedAtMs = watermarkCreatedAtMs(state)
+  if (currentWatermarkCreatedAtMs > 0 && eventCreatedAtMs > 0) {
+    if (eventCreatedAtMs > currentWatermarkCreatedAtMs) return true
+    if (eventCreatedAtMs < currentWatermarkCreatedAtMs) return false
+  }
+  return eventId > state.watermark_event_id
+}
+
+function advanceIdsAlertWatermark(items: IDSEventItem[]) {
+  if (!items.length) return
+  const latestItem = [...items].sort((left, right) => {
+    const rightCreatedAtMs = eventCreatedAtMsOfIdsAlert(right)
+    const leftCreatedAtMs = eventCreatedAtMsOfIdsAlert(left)
+    if (rightCreatedAtMs !== leftCreatedAtMs) return rightCreatedAtMs - leftCreatedAtMs
+    return eventIdOfIdsAlert(right) - eventIdOfIdsAlert(left)
+  })[0]
+  const latestEventId = eventIdOfIdsAlert(latestItem)
+  if (!latestEventId) return
   const state = readIdsAlertState()
+  const latestCreatedAt = String(latestItem?.created_at || '').trim() || null
+  if (
+    latestCreatedAt &&
+    !isIdsAlertNewerThanWatermark(latestItem, state) &&
+    latestEventId === state.watermark_event_id &&
+    state.watermark_created_at === latestCreatedAt
+  ) {
+    return
+  }
+  if (
+    latestCreatedAt &&
+    (watermarkCreatedAtMs(state) <= eventCreatedAtMsOfIdsAlert(latestItem) ||
+      latestEventId > state.watermark_event_id)
+  ) {
+    state.watermark_event_id = latestEventId
+    state.watermark_created_at = latestCreatedAt
+    writeIdsAlertState(state)
+    return
+  }
   if (latestEventId > state.watermark_event_id) {
     state.watermark_event_id = latestEventId
     writeIdsAlertState(state)
@@ -287,13 +346,21 @@ async function refreshAdminIdsRiskAlerts(options?: { silent?: boolean }) {
     if (!eventIds.length) return
 
     const state = readIdsAlertState()
-    if (state.watermark_event_id <= 0) {
-      advanceIdsAlertWatermark(eventIds)
+    if (state.watermark_event_id <= 0 && !state.watermark_created_at) {
+      advanceIdsAlertWatermark(scopedItems)
       return
     }
 
-    const freshItems = scopedItems.filter((item) => eventIdOfIdsAlert(item) > state.watermark_event_id)
-    advanceIdsAlertWatermark(eventIds)
+    const legacyLooksReset =
+      !state.watermark_created_at &&
+      state.watermark_event_id > 0 &&
+      Math.max(...eventIds) < state.watermark_event_id
+
+    const freshItems = legacyLooksReset
+      ? scopedItems
+      : scopedItems.filter((item) => isIdsAlertNewerThanWatermark(item, state))
+
+    advanceIdsAlertWatermark(scopedItems)
 
     if (isIdsAlertMutedToday()) return
     queueIdsRiskAlerts(freshItems, options)
