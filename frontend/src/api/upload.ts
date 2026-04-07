@@ -1,4 +1,4 @@
-import request from './request'
+import request, { resolveAPIURL } from './request'
 
 export interface UploadSecurityAlert {
   style?: string
@@ -53,6 +53,12 @@ export function publicUpload(file: File) {
   const form = new FormData()
   form.append('file', file)
   return request.post<UploadResult>('/upload', form)
+}
+
+export async function resolvePublicUploadURL() {
+  const custom = import.meta.env.VITE_PUBLIC_UPLOAD_URL as string | undefined
+  if (custom?.trim()) return custom.trim()
+  return resolveAPIURL('/upload')
 }
 
 export type UploadAuditMode = 'static_only' | 'llm_assisted'

@@ -24,6 +24,9 @@ Show one real end-to-end chain:
 - Quick start also writes `.ids-dev-processes.json` so `stop-ids-dev.bat` /
   `powershell -ExecutionPolicy Bypass -File .\stop-ids-dev.ps1` can close the
   exact demo windows and child processes after the session.
+- The anonymous upload page now uses the same dynamic backend probing path as
+  the authenticated frontend API client, so local demos from `5174` talk to
+  the live `8167/8166` backend instead of a stale Vite proxy target.
 - Backend running on `127.0.0.1:8166` or `127.0.0.1:8167`
 - Frontend running on `127.0.0.1:5173` or `127.0.0.1:5174`
 - Admin account ready: `system_admin / 123456`

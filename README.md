@@ -92,6 +92,7 @@ powershell -ExecutionPolicy Bypass -File .\stop-ids-dev.ps1
 The security-center upload, IDS, log-audit, sandbox, and situation pages now drive real IDS work instead of demo-only copy.
 
 - Public uploads run the AI audit gate in `backend/app/api/upload.py`. Safe files are stored under `uploads/accepted`, while review/quarantine verdicts keep the file in `quarantine_uploads` plus a JSON audit report in `upload_reports` that feeds the UI.
+- The public upload page now shares the same dynamic dev-time backend resolution as the authenticated frontend API client, so a Vite session on `5174` can post directly to the live `8167/8166` backend instead of falling back to a stale `/api` proxy target.
 - The public upload page now keeps a single consistent final state for each request: released, quarantined, or rejected. Closing the quarantine dialog no longer rewrites the same request into a fake “network error”.
 - `/security/ids` now stays on real incidents, trusted-source sync state, package activation state, and upload evidence. Event reports include `Upload Audit Trace`, and upload-gated incidents can jump directly back into the matching sandbox report.
 - Suspicious samples show up in `/security/sandbox` via `GET /api/upload/quarantine`, and `POST /api/upload/quarantine/analyze` reruns the real analysis on the persisted file so the drawer displays the verdict, risk, confidence, SHA-256, the indicator list, and the same persisted report after refresh.

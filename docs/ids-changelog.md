@@ -19,6 +19,38 @@ Spec references:
 - Push the active IDS branch to GitHub at the end of the day after updating this
   file, unless an unresolved conflict blocks the push.
 
+## 2026-04-08
+
+- Closed the remaining public-upload dev-path gap after release QA:
+  - `frontend/src/views/upload/PublicUpload.vue` no longer posts to a stale
+    `/api/upload` proxy target when `VITE_API_BASE=/api`,
+  - `frontend/src/api/request.ts` now exposes a reusable resolved API URL
+    helper, and `frontend/src/api/upload.ts` reuses that helper so anonymous
+    upload traffic follows the same live `8166/8167` backend probing logic as
+    the authenticated frontend API client,
+  - real browser validation confirmed the public upload page now releases a
+    safe text file and quarantines a malicious PHP file without regressing into
+    the old fake `502 / 上传审计失败` panel.
+- Re-ran the IDS/security-center audit after the fix:
+  - `cd frontend && npm run build` passed,
+  - `python -m py_compile backend/app/api/upload.py backend/app/api/ids.py backend/app/api/audit.py backend/app/main.py backend/app/middleware/ids_middleware.py backend/app/services/ids_engine.py backend/app/services/upload_ai_audit.py` passed,
+  - `/api/health` reported `llm_assisted` with `provider=deepseek` and
+    `model=deepseek-chat`,
+  - real static probes `GET /.env`, `GET /login?user=${jndi:ldap://demo/a}`,
+    and `GET /proxy.php?url=<script>alert(1)</script>` all returned `403`,
+    with IDS events attributed to `detector_name=suricata-web-prod`,
+  - a safe `.txt` upload was released, a malicious `.php` upload was held in
+    the sandbox and linked to IDS event `#104`, sandbox report/reanalysis both
+    returned real analysis payloads, and `/api/ids/log-audit` showed the
+    matching `ids_upload_release`, `ids_upload_quarantine`, and
+    `ids_sandbox_analyze` records,
+  - fresh browser QA confirmed `system_admin` saw event `#111`, the next popup
+    for event `#110` appeared about `10325ms` after closing the first one,
+    `跳转 IDS 页面` landed on `/security/ids?event=110&report=1`,
+    `logistics_admin` still saw no popup during a 15-second watch window, and
+    both `/security/sandbox` and `/security/log-audit` loaded real operator
+    data.
+
 ## 2026-04-07
 
 - Bootstrapped the bundled `suricata-web-prod` manifest/rules fixture into the

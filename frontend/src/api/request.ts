@@ -68,6 +68,12 @@ async function resolveBaseURL() {
   return resolvingBaseURL
 }
 
+export async function resolveAPIURL(path: string) {
+  const baseURL = await resolveBaseURL()
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  return `${baseURL.replace(/\/$/, '')}${normalizedPath}`
+}
+
 const request = axios.create({
   baseURL: resolvedBaseURL || '/api',
   timeout: 15000,

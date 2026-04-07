@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheckFilled, Clock, Lock, Upload } from '@element-plus/icons-vue'
 import {
   getUploadAuditRuntime,
+  resolvePublicUploadURL,
   type UploadAuditMode,
   type UploadAuditResult,
   type UploadResult,
@@ -26,14 +27,6 @@ function sleep(ms: number) {
 
 function onFileChange(files: FileList | null) {
   fileList.value = files ? Array.from(files) : []
-}
-
-function resolveUploadUrl(): string {
-  const custom = import.meta.env.VITE_PUBLIC_UPLOAD_URL as string | undefined
-  if (custom?.trim()) return custom.trim()
-  const apiBase = import.meta.env.VITE_API_BASE as string | undefined
-  if (apiBase?.trim()) return `${apiBase.replace(/\/$/, '')}/upload`
-  return '/api/upload'
 }
 
 function auditModeLabel(mode?: string | null) {
@@ -162,7 +155,7 @@ async function handleUpload() {
     await sleep(150)
     phase.value = 'auditing'
 
-    const response = await fetch(resolveUploadUrl(), {
+    const response = await fetch(await resolvePublicUploadURL(), {
       method: 'POST',
       body: form,
       credentials: 'include',
