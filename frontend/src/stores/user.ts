@@ -64,6 +64,7 @@ export const useUserStore = defineStore('user', () => {
       localStorage.setItem('token', t)
     } else {
       localStorage.removeItem('token')
+      userInfo.value = null
       writeStoredUserInfo(null)
     }
   }
