@@ -4,10 +4,23 @@ import { useUserStore } from '@/stores/user'
 import router from '@/router'
 
 const directBaseURL = import.meta.env.VITE_API_BASE
-const devBaseCandidates = [
-  'http://127.0.0.1:8166/api',
-  'http://127.0.0.1:8167/api',
-]
+
+function buildDevBaseCandidates() {
+  if (typeof window !== 'undefined') {
+    const port = window.location.port || ''
+    if (port === '5174' || port === '4174') {
+      return [
+        'http://127.0.0.1:8167/api',
+        'http://127.0.0.1:8166/api',
+      ]
+    }
+  }
+
+  return [
+    'http://127.0.0.1:8166/api',
+    'http://127.0.0.1:8167/api',
+  ]
+}
 const shouldAutoPickDevBase = import.meta.env.DEV && (!directBaseURL || directBaseURL === '/api')
 
 // 鍐呯綉绌块€忥細闈炴湰鏈鸿闂椂寮哄埗鐢?/api锛岄伩鍏嶈姹傚彂鍒拌闂€呯殑 127.0.0.1
@@ -21,10 +34,14 @@ let resolvedBaseURL: string | null = shouldAutoPickDevBase ? null : (directBaseU
 let resolvingBaseURL: Promise<string> | null = null
 
 async function pickDevBaseURL() {
-  for (const candidate of devBaseCandidates) {
+  const candidates = buildDevBaseCandidates()
+  for (const candidate of candidates) {
     try {
-      const res = await axios.get(`${candidate}/health`, { timeout: 2000 })
-      if (res.status === 200) {
+      const res = await fetch(`${candidate}/health`, {
+        method: 'GET',
+        cache: 'no-store',
+      })
+      if (res.ok) {
         return candidate
       }
     } catch {
@@ -32,7 +49,7 @@ async function pickDevBaseURL() {
     }
   }
 
-  return devBaseCandidates[0]
+  return candidates[0]
 }
 
 async function resolveBaseURL() {

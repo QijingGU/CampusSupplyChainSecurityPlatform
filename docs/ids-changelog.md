@@ -560,3 +560,8 @@ Spec references:
 - Documented the real upload state machine:
   - the public upload experience now communicates upload → AI audit → decision states clearly and surfaces explicit errors when the gate rejects a file because AI is not configured,
   - `specs/010-ids-strict-ai-log-audit/` captures the constitution, plan, and task breakdown for this “dual-mode upload audit + startup prompt + log audit + live upload flow” change so reviewers can trace the shipped behavior.
+
+- Follow-up hardening and live verification for the same slice:
+  - `backend/app/services/ids_engine.py` now filters low-signal Log4j/JNDI Suricata tokens during runtime-pattern derivation so normal internal requests such as `/api/user/login` or `/api/ids/events` no longer trip `jndi_injection` by accident, while real payloads such as `${jndi:ldap://...}` still match and block,
+  - `frontend/src/api/request.ts` now chooses the backend probe order from the current Vite port, preferring `8167` when the frontend is running on `5174/4174`, and uses direct `fetch(.../health)` probing so local dev does not silently fall back to the wrong backend,
+  - the admin-only popup queue in `frontend/src/components/layout/AppLayout.vue` was revalidated with real upload incidents instead of seed data: two quarantined PHP uploads produced IDS events `#77` and `#76`, `system_admin` received the second popup about `10.67s` after closing the first, and `logistics_admin` still received no popup during a 12-second watch after a later high-risk upload event.

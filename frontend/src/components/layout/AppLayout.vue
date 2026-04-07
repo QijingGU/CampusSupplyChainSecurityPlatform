@@ -42,7 +42,8 @@ const idsRiskAlertCurrent = ref<IDSEventItem | null>(null)
 const idsRiskAlertQueue = ref<IDSEventItem[]>([])
 let idsAlertPollingTimer: number | null = null
 let idsAlertScheduleTimer: number | null = null
-let idsAlertLastShownAt = 0
+let idsAlertNextAllowedAt = 0
+let idsRiskAlertPendingJumpEventId: number | null = null
 
 type IDSAlertState = {
   date: string
@@ -159,7 +160,7 @@ function showNextIdsAlert(force = false) {
   clearIdsAlertSchedule()
   if (!isSystemAdmin.value || isIdsAlertMutedToday() || idsRiskAlertVisible.value || idsRiskAlertCurrent.value) return
   if (!idsRiskAlertQueue.value.length) return
-  const delay = force ? 0 : Math.max(0, idsAlertLastShownAt + IDS_ALERT_POPUP_GAP - Date.now())
+  const delay = force ? 0 : Math.max(0, idsAlertNextAllowedAt - Date.now())
   if (delay > 0) {
     idsAlertScheduleTimer = window.setTimeout(() => {
       idsAlertScheduleTimer = null
@@ -171,12 +172,20 @@ function showNextIdsAlert(force = false) {
   if (!next) return
   idsRiskAlertCurrent.value = next
   idsRiskAlertVisible.value = true
-  idsAlertLastShownAt = Date.now()
   markIdsAlertSeen(next.id)
 }
 
 function dismissIdsRiskAlert() {
+  const jumpEventId = idsRiskAlertPendingJumpEventId
+  idsRiskAlertPendingJumpEventId = null
   idsRiskAlertCurrent.value = null
+  idsAlertNextAllowedAt = Date.now() + IDS_ALERT_POPUP_GAP
+  if (jumpEventId) {
+    void router.push({ path: '/security/ids', query: { event: String(jumpEventId), report: '1' } }).finally(() => {
+      showNextIdsAlert()
+    })
+    return
+  }
   showNextIdsAlert()
 }
 
@@ -184,11 +193,9 @@ function handleIdsRiskAlertClose() {
   idsRiskAlertVisible.value = false
 }
 
-async function handleIdsRiskAlertJump() {
-  const eventId = idsRiskAlertCurrent.value?.id
+function handleIdsRiskAlertJump() {
+  idsRiskAlertPendingJumpEventId = idsRiskAlertCurrent.value?.id ?? null
   idsRiskAlertVisible.value = false
-  if (!eventId) return
-  await router.push({ path: '/security/ids', query: { event: String(eventId), report: '1' } })
 }
 
 function handleIdsRiskAlertMuteToday() {
@@ -225,6 +232,8 @@ function queueIdsRiskAlerts(items: IDSEventItem[], options?: { silent?: boolean 
 
 async function refreshAdminIdsRiskAlerts(options?: { silent?: boolean }) {
   if (!isSystemAdmin.value) {
+    idsRiskAlertPendingJumpEventId = null
+    idsAlertNextAllowedAt = 0
     idsRiskAlertQueue.value = []
     idsRiskAlertVisible.value = false
     idsRiskAlertCurrent.value = null

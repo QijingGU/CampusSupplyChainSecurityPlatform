@@ -112,6 +112,9 @@ Show one real end-to-end chain:
 - The upload result explains why the file was held and whether the verdict came
   from `static_only` or `llm_assisted` mode.
 - No public accepted-file URL is returned.
+- If two high-risk upload events are queued back-to-back, closing the first
+  popup should not immediately show the second one; the next popup should wait
+  at least 10 seconds before appearing.
 - If a `system_admin` session is already open, the global IDS popup should
   appear within one polling cycle for the new high-risk upload event and show
   `关闭` / `今日不再弹出` / `跳转 IDS 页面`. Non-admin sessions should not
@@ -210,6 +213,11 @@ Show one real end-to-end chain:
 ## Backup Talking Points
 
 - Safe files still work, the system is not blocking everything.
+- Local replay on 2026-04-07 confirmed the popup behavior with real upload
+  incidents: two quarantined PHP uploads produced events `#77` and `#76`,
+  `system_admin` saw them sequentially with about `10.67s` between close and
+  the next popup, and `logistics_admin` remained popup-free during a 12-second
+  watch window after a later high-risk upload.
 - The admin-only high-risk popup is sourced from the same blocked/unarchived
   IDS queue shown in `/security/ids`; closing one alert will not immediately
   spam the operator because queued popups are rate-limited to one every 10
