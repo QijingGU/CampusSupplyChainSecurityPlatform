@@ -12,6 +12,11 @@ import type { IDSEventItem } from '@/api/ids'
 import { listPurchases } from '@/api/purchase'
 import { listSupplierOrders } from '@/api/supplier'
 import { listMyPurchases } from '@/api/purchase'
+import {
+  dispatchIDSFocusEvent,
+  playIdsAlertSound,
+  primeIdsAlertSound,
+} from '@/utils/idsAdminAlert'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,27 +33,31 @@ const immersiveScreen = computed(() => {
 const pageTitle = computed(() => (route.meta?.title as string) || '')
 const role = computed(() => userStore.userInfo?.role as string)
 const isSystemAdmin = computed(() => role.value === 'system_admin')
+const isOnIdsPage = computed(() => route.path.startsWith('/security/ids'))
+const idsRiskAlertJumpLabel = computed(() => (isOnIdsPage.value ? '定位当前事件' : '前往 IDS 事件'))
+const idsRiskAlertHintText = computed(() =>
+  idsRiskAlertQueue.value.length
+    ? `队列中还有 ${idsRiskAlertQueue.value.length} 条高危事件，关闭当前弹窗后会立即继续告警。`
+    : '这是当前最新的一条待处理高危事件。',
+)
 
 let pollingTimer: number | null = null
 const prevCounts: Record<string, number> = {}
 
 const POLL_INTERVAL = 25000
 const IDS_ALERT_POLL_INTERVAL = 10000
-const IDS_ALERT_POPUP_GAP = 10000
 const IDS_ALERT_MIN_SCORE = 80
 const IDS_ALERT_STATE_KEY = 'ids-admin-high-risk-alert-v1'
 const idsRiskAlertVisible = ref(false)
 const idsRiskAlertCurrent = ref<IDSEventItem | null>(null)
 const idsRiskAlertQueue = ref<IDSEventItem[]>([])
 let idsAlertPollingTimer: number | null = null
-let idsAlertScheduleTimer: number | null = null
-let idsAlertNextAllowedAt = 0
 let idsRiskAlertPendingJumpEventId: number | null = null
+let idsAlertAudioPrimed = false
 
 type IDSAlertState = {
-  date: string
-  muted_for_today: boolean
-  seen_event_ids: number[]
+  muted_date: string | null
+  watermark_event_id: number
 }
 
 function currentDateKey() {
@@ -61,9 +70,8 @@ function currentDateKey() {
 
 function defaultIdsAlertState(): IDSAlertState {
   return {
-    date: currentDateKey(),
-    muted_for_today: false,
-    seen_event_ids: [],
+    muted_date: null,
+    watermark_event_id: 0,
   }
 }
 
@@ -71,17 +79,33 @@ function readIdsAlertState(): IDSAlertState {
   try {
     const raw = localStorage.getItem(IDS_ALERT_STATE_KEY)
     if (!raw) return defaultIdsAlertState()
-    const parsed = JSON.parse(raw) as Partial<IDSAlertState> | null
-    if (!parsed || parsed.date !== currentDateKey()) return defaultIdsAlertState()
+    const parsed = JSON.parse(raw) as
+      | (Partial<IDSAlertState> & {
+          date?: string
+          muted_for_today?: boolean
+          seen_event_ids?: unknown[]
+        })
+      | null
+    const legacySeenIds = Array.isArray(parsed?.seen_event_ids)
+      ? parsed.seen_event_ids
+          .map((item) => Number(item))
+          .filter((item) => Number.isFinite(item) && item > 0)
+      : []
+    const legacyWatermark = legacySeenIds.length ? Math.max(...legacySeenIds) : 0
+    const watermarkEventId = Math.max(
+      Number(parsed?.watermark_event_id || 0),
+      legacyWatermark,
+    )
+    const mutedDate =
+      typeof parsed?.muted_date === 'string' && parsed.muted_date === currentDateKey()
+        ? parsed.muted_date
+        : parsed?.muted_for_today && parsed.date === currentDateKey()
+          ? currentDateKey()
+          : null
     return {
-      date: parsed.date || currentDateKey(),
-      muted_for_today: Boolean(parsed.muted_for_today),
-      seen_event_ids: Array.isArray(parsed.seen_event_ids)
-        ? parsed.seen_event_ids
-            .map((item) => Number(item))
-            .filter((item) => Number.isFinite(item) && item > 0)
-            .slice(0, 200)
-        : [],
+      muted_date: mutedDate,
+      watermark_event_id:
+        Number.isFinite(watermarkEventId) && watermarkEventId > 0 ? watermarkEventId : 0,
     }
   } catch {
     return defaultIdsAlertState()
@@ -93,31 +117,29 @@ function writeIdsAlertState(state: IDSAlertState) {
 }
 
 function isIdsAlertMutedToday() {
-  return readIdsAlertState().muted_for_today
+  return readIdsAlertState().muted_date === currentDateKey()
 }
 
-function hasSeenIdsAlert(eventId?: number | null) {
-  if (!eventId) return false
-  return readIdsAlertState().seen_event_ids.includes(eventId)
+function eventIdOfIdsAlert(item?: IDSEventItem | null) {
+  const eventId = Number(item?.id || 0)
+  return Number.isFinite(eventId) && eventId > 0 ? eventId : 0
 }
 
-function markIdsAlertSeen(eventId?: number | null) {
-  if (!eventId) return
+function advanceIdsAlertWatermark(eventIds: number[]) {
+  if (!eventIds.length) return
+  const latestEventId = Math.max(...eventIds)
+  if (!Number.isFinite(latestEventId) || latestEventId <= 0) return
   const state = readIdsAlertState()
-  if (!state.seen_event_ids.includes(eventId)) {
-    state.seen_event_ids = [...state.seen_event_ids, eventId].slice(-200)
+  if (latestEventId > state.watermark_event_id) {
+    state.watermark_event_id = latestEventId
     writeIdsAlertState(state)
   }
 }
 
 function muteIdsAlertsForToday() {
   const state = readIdsAlertState()
-  state.muted_for_today = true
+  state.muted_date = currentDateKey()
   writeIdsAlertState(state)
-}
-
-function resetIdsAlertStateForToday() {
-  writeIdsAlertState(defaultIdsAlertState())
 }
 
 function idsAlertAttackTitle(item?: IDSEventItem | null) {
@@ -141,11 +163,25 @@ function idsAlertEvidence(item?: IDSEventItem | null) {
   )
 }
 
-function clearIdsAlertSchedule() {
-  if (idsAlertScheduleTimer) {
-    clearTimeout(idsAlertScheduleTimer)
-    idsAlertScheduleTimer = null
-  }
+function primeIdsAlertAudioOnce() {
+  if (idsAlertAudioPrimed) return
+  idsAlertAudioPrimed = true
+  void primeIdsAlertSound()
+  window.removeEventListener('pointerdown', primeIdsAlertAudioOnce)
+  window.removeEventListener('keydown', primeIdsAlertAudioOnce)
+  window.removeEventListener('touchstart', primeIdsAlertAudioOnce)
+}
+
+function bindIdsAlertAudioPriming() {
+  window.addEventListener('pointerdown', primeIdsAlertAudioOnce)
+  window.addEventListener('keydown', primeIdsAlertAudioOnce)
+  window.addEventListener('touchstart', primeIdsAlertAudioOnce)
+}
+
+function unbindIdsAlertAudioPriming() {
+  window.removeEventListener('pointerdown', primeIdsAlertAudioOnce)
+  window.removeEventListener('keydown', primeIdsAlertAudioOnce)
+  window.removeEventListener('touchstart', primeIdsAlertAudioOnce)
 }
 
 function stopIdsAlertPolling() {
@@ -153,35 +189,24 @@ function stopIdsAlertPolling() {
     clearInterval(idsAlertPollingTimer)
     idsAlertPollingTimer = null
   }
-  clearIdsAlertSchedule()
 }
 
-function showNextIdsAlert(force = false) {
-  clearIdsAlertSchedule()
+function showNextIdsAlert() {
   if (!isSystemAdmin.value || isIdsAlertMutedToday() || idsRiskAlertVisible.value || idsRiskAlertCurrent.value) return
   if (!idsRiskAlertQueue.value.length) return
-  const delay = force ? 0 : Math.max(0, idsAlertNextAllowedAt - Date.now())
-  if (delay > 0) {
-    idsAlertScheduleTimer = window.setTimeout(() => {
-      idsAlertScheduleTimer = null
-      showNextIdsAlert(true)
-    }, delay)
-    return
-  }
   const next = idsRiskAlertQueue.value.shift() || null
   if (!next) return
   idsRiskAlertCurrent.value = next
   idsRiskAlertVisible.value = true
-  markIdsAlertSeen(next.id)
+  void playIdsAlertSound().catch(() => undefined)
 }
 
 function dismissIdsRiskAlert() {
   const jumpEventId = idsRiskAlertPendingJumpEventId
   idsRiskAlertPendingJumpEventId = null
   idsRiskAlertCurrent.value = null
-  idsAlertNextAllowedAt = Date.now() + IDS_ALERT_POPUP_GAP
   if (jumpEventId) {
-    void router.push({ path: '/security/ids', query: { event: String(jumpEventId), report: '1' } }).finally(() => {
+    void router.push({ path: '/security/ids', query: { event: String(jumpEventId) } }).finally(() => {
       showNextIdsAlert()
     })
     return
@@ -194,7 +219,14 @@ function handleIdsRiskAlertClose() {
 }
 
 function handleIdsRiskAlertJump() {
-  idsRiskAlertPendingJumpEventId = idsRiskAlertCurrent.value?.id ?? null
+  const eventId = idsRiskAlertCurrent.value?.id ?? null
+  if (eventId && isOnIdsPage.value) {
+    idsRiskAlertPendingJumpEventId = null
+    dispatchIDSFocusEvent({ eventId, report: false })
+    idsRiskAlertVisible.value = false
+    return
+  }
+  idsRiskAlertPendingJumpEventId = eventId
   idsRiskAlertVisible.value = false
 }
 
@@ -212,8 +244,8 @@ function queueIdsRiskAlerts(items: IDSEventItem[], options?: { silent?: boolean 
   ])
   const freshItems: IDSEventItem[] = []
   for (const item of items) {
-    const eventId = Number(item?.id || 0)
-    if (!eventId || queuedIds.has(eventId) || hasSeenIdsAlert(eventId)) continue
+    const eventId = eventIdOfIdsAlert(item)
+    if (!eventId || queuedIds.has(eventId)) continue
     queuedIds.add(eventId)
     freshItems.push(item)
   }
@@ -233,16 +265,11 @@ function queueIdsRiskAlerts(items: IDSEventItem[], options?: { silent?: boolean 
 async function refreshAdminIdsRiskAlerts(options?: { silent?: boolean }) {
   if (!isSystemAdmin.value) {
     idsRiskAlertPendingJumpEventId = null
-    idsAlertNextAllowedAt = 0
     idsRiskAlertQueue.value = []
     idsRiskAlertVisible.value = false
     idsRiskAlertCurrent.value = null
     return
   }
-  if (readIdsAlertState().date !== currentDateKey()) {
-    resetIdsAlertStateForToday()
-  }
-  if (isIdsAlertMutedToday()) return
   try {
     const res: any = await listIDSEvents({
       blocked: 1,
@@ -255,7 +282,21 @@ async function refreshAdminIdsRiskAlerts(options?: { silent?: boolean }) {
       : Array.isArray(res?.data?.items)
         ? res.data.items
         : []
-    queueIdsRiskAlerts(items.filter((item) => (item.risk_score || 0) >= IDS_ALERT_MIN_SCORE), options)
+    const scopedItems = items.filter((item) => (item.risk_score || 0) >= IDS_ALERT_MIN_SCORE)
+    const eventIds = scopedItems.map((item) => eventIdOfIdsAlert(item)).filter((item) => item > 0)
+    if (!eventIds.length) return
+
+    const state = readIdsAlertState()
+    if (state.watermark_event_id <= 0) {
+      advanceIdsAlertWatermark(eventIds)
+      return
+    }
+
+    const freshItems = scopedItems.filter((item) => eventIdOfIdsAlert(item) > state.watermark_event_id)
+    advanceIdsAlertWatermark(eventIds)
+
+    if (isIdsAlertMutedToday()) return
+    queueIdsRiskAlerts(freshItems, options)
   } catch {
     /* keep silent for global polling */
   }
@@ -468,6 +509,7 @@ watch(
 )
 
 onMounted(async () => {
+  bindIdsAlertAudioPriming()
   await refreshAll({ silent: true })
   await refreshAdminIdsRiskAlerts({ silent: true })
   await markCurrentAsSeen()
@@ -497,6 +539,7 @@ watch(
 onBeforeUnmount(() => {
   stopPolling()
   stopIdsAlertPolling()
+  unbindIdsAlertAudioPriming()
   syncImmersiveBodyClass(false)
 })
 </script>
@@ -562,7 +605,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="ids-risk-alert__hint">
-            {{ idsRiskAlertQueue.length ? `队列中还有 ${idsRiskAlertQueue.length} 条高危事件，弹窗最短间隔 10 秒。` : '这是当前最新一条待处理高危事件。' }}
+            {{ idsRiskAlertHintText }}
           </div>
         </div>
       </template>
@@ -571,7 +614,7 @@ onBeforeUnmount(() => {
         <div class="ids-risk-alert__actions">
           <el-button @click="handleIdsRiskAlertClose">关闭</el-button>
           <el-button @click="handleIdsRiskAlertMuteToday">今日不再弹出</el-button>
-          <el-button type="danger" @click="handleIdsRiskAlertJump">跳转 IDS 页面</el-button>
+          <el-button type="danger" @click="handleIdsRiskAlertJump">{{ idsRiskAlertJumpLabel }}</el-button>
         </div>
       </template>
     </el-dialog>

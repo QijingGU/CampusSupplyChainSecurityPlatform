@@ -44,14 +44,40 @@ Spec references:
     returned real analysis payloads, and `/api/ids/log-audit` showed the
     matching `ids_upload_release`, `ids_upload_quarantine`, and
     `ids_sandbox_analyze` records,
-  - fresh browser QA confirmed `system_admin` saw event `#111`, the next popup
-    for event `#110` appeared about `10325ms` after closing the first one,
-    `跳转 IDS 页面` landed on `/security/ids?event=110&report=1`,
-    `logistics_admin` still saw no popup during a 15-second watch window, and
-    both `/security/sandbox` and `/security/log-audit` loaded real operator
-    data.
+  - fresh browser QA exposed the remaining admin-alert gaps before the
+    follow-up fix below:
+    `system_admin` still saw event `#111`, the next popup for event `#110`
+    appeared about `10325ms` after closing the first one, `跳转 IDS 页面`
+    still landed on `/security/ids?event=110&report=1`, `logistics_admin`
+    still saw no popup during a 15-second watch window, and both
+    `/security/sandbox` and `/security/log-audit` loaded real operator data.
+- Closed the remaining admin-alert behavior gaps on the same day:
+  - `frontend/src/components/layout/AppLayout.vue` no longer rate-limits queued
+    IDS popups to one every 10 seconds; each new high-risk event is shown once,
+    and the next queued event appears as soon as the current popup closes,
+  - the popup state now tracks a persisted event-id watermark instead of only a
+    per-day seen list, so historical unarchived high-risk incidents are not
+    replayed again as fresh alerts after a page reload, browser restart, or day
+    change,
+  - if the operator is already on `/security/ids`, the popup action now keeps
+    the route in place and emits an in-page focus event instead of pushing a
+    new `?event=...&report=1` route that forced another report run,
+  - `frontend/src/views/security/SecurityIDS.vue` now exposes an admin-only
+    warning-sound panel with enable/disable, volume, custom-audio import,
+    test-playback, and reset-to-default controls, backed by persisted browser
+    storage plus IndexedDB audio asset storage,
+  - live browser validation on 2026-04-08 confirmed `/security/ids` stayed on
+    the same URL while the in-page focus action opened the detail drawer for
+    event `#117`, the next queued popup for event `#116` appeared immediately,
+    and the imported custom warning sound played for both popups (`media=2` in
+    the browser audio probe).
+
 
 ## 2026-04-07
+
+- Historical note: popup timing and `?report=1` route behavior described in the
+  validation bullets below were the branch state on 2026-04-07 and were later
+  removed by the 2026-04-08 admin-alert closure above.
 
 - Bootstrapped the bundled `suricata-web-prod` manifest/rules fixture into the
   runtime IDS source registry at startup, so fresh offline environments now
@@ -604,3 +630,4 @@ Spec references:
   - `backend/app/services/ids_engine.py` now filters low-signal Log4j/JNDI Suricata tokens during runtime-pattern derivation so normal internal requests such as `/api/user/login` or `/api/ids/events` no longer trip `jndi_injection` by accident, while real payloads such as `${jndi:ldap://...}` still match and block,
   - `frontend/src/api/request.ts` now chooses the backend probe order from the current Vite port, preferring `8167` when the frontend is running on `5174/4174`, and uses direct `fetch(.../health)` probing so local dev does not silently fall back to the wrong backend,
   - the admin-only popup queue in `frontend/src/components/layout/AppLayout.vue` was revalidated with real upload incidents instead of seed data: two quarantined PHP uploads produced IDS events `#77` and `#76`, `system_admin` received the second popup about `10.67s` after closing the first, and `logistics_admin` still received no popup during a 12-second watch after a later high-risk upload event.
+

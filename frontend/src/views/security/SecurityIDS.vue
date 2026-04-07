@@ -5,6 +5,7 @@ import * as echarts from 'echarts'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
+import { useUserStore } from '@/stores/user'
 import {
   listIDSEvents,
   getIDSStats,
@@ -43,6 +44,18 @@ import type {
   IDSSourcePackagePreviewPayload,
   IDSSourcePackagePreviewResponse,
 } from '@/api/ids'
+import type { IDSAlertSoundAssetInfo, IDSAlertSoundSettings, IDSFocusEventDetail } from '@/utils/idsAdminAlert'
+import {
+  IDS_ALERT_FOCUS_EVENT,
+  IDS_ALERT_SOUND_SETTINGS_UPDATED_EVENT,
+  clearIdsAlertCustomSound,
+  getIdsAlertCustomSoundInfo,
+  playIdsAlertSound,
+  primeIdsAlertSound,
+  readIdsAlertSoundSettings,
+  saveIdsAlertCustomSound,
+  writeIdsAlertSoundSettings,
+} from '@/utils/idsAdminAlert'
 
 type SourceFormState = IDSSourceRegistryPayload
 type PackagePreviewFormState = IDSSourcePackagePreviewPayload
@@ -50,6 +63,7 @@ type PackageActivationFormState = { package_intake_id: number; triggered_by: str
 
 const route = useRoute()
 const router = useRouter()
+const userStore = useUserStore()
 const loading = ref(false)
 const trendDays = ref(7)
 const trendData = ref<{ dates: string[]; counts: number[] }>({ dates: [], counts: [] })
@@ -115,6 +129,10 @@ const aiProcessVisible = ref(false)
 const aiProcessText = ref('AI 正在初始化安全研判引擎...')
 const aiProcessMode = ref<'analysis'>('analysis')
 const aiProcessFeed = ref<string[]>([])
+const isSystemAdmin = computed(() => userStore.userInfo?.role === 'system_admin')
+const warningAudioInputRef = ref<HTMLInputElement | null>(null)
+const idsAlertSoundSettings = reactive<IDSAlertSoundSettings>(readIdsAlertSoundSettings())
+const idsAlertCustomSoundInfo = ref<IDSAlertSoundAssetInfo | null>(null)
 
 const idsHudClock = ref('')
 let idsHudClockTimer: ReturnType<typeof setInterval> | null = null
@@ -585,6 +603,98 @@ function reportAnalysisModeLabel() {
     reportDecisionBasis()?.analysis_mode ||
     '-'
   )
+}
+
+async function refreshIdsAlertSoundConfig() {
+  Object.assign(idsAlertSoundSettings, readIdsAlertSoundSettings())
+  const info = await getIdsAlertCustomSoundInfo().catch(() => null)
+  idsAlertCustomSoundInfo.value = info
+  if (!info && (idsAlertSoundSettings.custom_audio_name || idsAlertSoundSettings.custom_audio_updated_at)) {
+    writeIdsAlertSoundSettings({
+      custom_audio_name: '',
+      custom_audio_updated_at: null,
+    })
+    Object.assign(idsAlertSoundSettings, readIdsAlertSoundSettings())
+  }
+}
+
+function persistIdsAlertSoundState(next: Partial<IDSAlertSoundSettings>) {
+  Object.assign(idsAlertSoundSettings, writeIdsAlertSoundSettings(next))
+}
+
+function triggerWarningAudioPicker() {
+  warningAudioInputRef.value?.click()
+}
+
+async function handleWarningAudioFileChange(event: Event) {
+  const input = event.target as HTMLInputElement | null
+  const file = input?.files?.[0]
+  if (!file) return
+
+  const isAudioFile = file.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name)
+  if (!isAudioFile) {
+    ElMessage.error('请选择音频文件作为预警声音')
+    if (input) input.value = ''
+    return
+  }
+
+  if (file.size > 8 * 1024 * 1024) {
+    ElMessage.error('预警音频请控制在 8MB 以内')
+    if (input) input.value = ''
+    return
+  }
+
+  try {
+    await saveIdsAlertCustomSound(file)
+    await refreshIdsAlertSoundConfig()
+    await primeIdsAlertSound()
+    await playIdsAlertSound({ force: true })
+    ElMessage.success(`已启用自定义预警音频：${file.name}`)
+  } catch (error: any) {
+    ElMessage.error(error?.message || '自定义预警音频保存失败')
+  } finally {
+    if (input) input.value = ''
+  }
+}
+
+async function testIdsAlertSound() {
+  try {
+    await primeIdsAlertSound()
+    await playIdsAlertSound({ force: true })
+  } catch (error: any) {
+    ElMessage.error(error?.message || '当前预警声音播放失败')
+  }
+}
+
+async function restoreDefaultIdsAlertSound() {
+  try {
+    await clearIdsAlertCustomSound()
+    await refreshIdsAlertSoundConfig()
+    await primeIdsAlertSound()
+    await playIdsAlertSound({ force: true })
+    ElMessage.success('已恢复默认预警声音')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '默认预警声音恢复失败')
+  }
+}
+
+async function focusEventFromBroadcast(detail?: IDSFocusEventDetail | null) {
+  const eventId = Number(detail?.eventId || 0)
+  if (!Number.isFinite(eventId) || eventId <= 0) return
+  try {
+    await openEventById(eventId, { report: detail?.report === true })
+  } catch {
+    ElMessage.error('指定 IDS 事件加载失败')
+  }
+}
+
+function handleIdsFocusEvent(event: Event) {
+  const customEvent = event as CustomEvent<IDSFocusEventDetail>
+  void focusEventFromBroadcast(customEvent.detail)
+}
+
+function handleIdsAlertSoundSettingsUpdated() {
+  void refreshIdsAlertSoundConfig()
 }
 
 function resetSourceForm() {
@@ -1285,6 +1395,12 @@ onMounted(async () => {
   idsHudClockTimer = setInterval(tickIdsHudClock, 1000)
   refreshIdsTableMaxHeight()
   window.addEventListener('resize', handleResize)
+  window.addEventListener(IDS_ALERT_FOCUS_EVENT, handleIdsFocusEvent as EventListener)
+  window.addEventListener(
+    IDS_ALERT_SOUND_SETTINGS_UPDATED_EVENT,
+    handleIdsAlertSoundSettingsUpdated as EventListener,
+  )
+  await refreshIdsAlertSoundConfig()
   await Promise.all([fetchSources(), fetchStats(), fetchTrend(), fetchData()])
   await focusEventFromRoute()
 })
@@ -1293,11 +1409,28 @@ onBeforeUnmount(() => {
   idsHudClockTimer = null
   stopAiProcess()
   window.removeEventListener('resize', handleResize)
+  window.removeEventListener(IDS_ALERT_FOCUS_EVENT, handleIdsFocusEvent as EventListener)
+  window.removeEventListener(
+    IDS_ALERT_SOUND_SETTINGS_UPDATED_EVENT,
+    handleIdsAlertSoundSettingsUpdated as EventListener,
+  )
   pieChartInstance?.dispose()
   trendChartInstance?.dispose()
 })
 watch([pageOffset, pageSize], fetchData)
 watch(trendDays, () => fetchTrend())
+watch(
+  () => idsAlertSoundSettings.enabled,
+  (enabled) => {
+    persistIdsAlertSoundState({ enabled })
+  },
+)
+watch(
+  () => idsAlertSoundSettings.volume,
+  (volume) => {
+    persistIdsAlertSoundState({ volume })
+  },
+)
 watch([eventOriginFilter, sourceClassificationFilter], () => {
   pageOffset.value = 0
   fetchStats()
@@ -1395,6 +1528,58 @@ watch(
           >
             {{ sourceClassificationLabel(sourceClassificationFilter) }}
           </el-tag>
+        </div>
+      </div>
+
+      <div v-if="isSystemAdmin" class="ids-alert-sound-card sec-card">
+        <div class="ids-alert-sound-card__header">
+          <div>
+            <div class="chart-title">管理员预警声音</div>
+            <div class="ids-alert-sound-card__subtitle">
+              每次新的高危攻击弹窗出现时都会播放预警声音。你可以在这里开关声音、调整音量、导入自定义音频并立即试听。
+            </div>
+          </div>
+          <el-switch
+            v-model="idsAlertSoundSettings.enabled"
+            inline-prompt
+            active-text="开启"
+            inactive-text="静音"
+          />
+        </div>
+
+        <div class="ids-alert-sound-card__grid">
+          <div class="ids-alert-sound-card__panel">
+            <div class="ids-alert-sound-card__label">当前音源</div>
+            <div class="ids-alert-sound-card__value">
+              {{ idsAlertCustomSoundInfo?.name || '默认预警音' }}
+            </div>
+            <div class="ids-alert-sound-card__meta">
+              <span>{{ idsAlertCustomSoundInfo ? '自定义音频' : '系统默认音效' }}</span>
+              <span v-if="idsAlertCustomSoundInfo">{{ formatBytes(idsAlertCustomSoundInfo.size) }}</span>
+              <span v-if="idsAlertCustomSoundInfo?.updatedAt">{{ fmtTableDateTime(idsAlertCustomSoundInfo.updatedAt) }}</span>
+            </div>
+          </div>
+
+          <div class="ids-alert-sound-card__panel">
+            <div class="ids-alert-sound-card__label">音量</div>
+            <div class="ids-alert-sound-card__slider">
+              <el-slider v-model="idsAlertSoundSettings.volume" :min="0" :max="1" :step="0.05" />
+              <span class="ids-alert-sound-card__value">{{ Math.round(idsAlertSoundSettings.volume * 100) }}%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ids-alert-sound-card__actions">
+          <input
+            ref="warningAudioInputRef"
+            type="file"
+            accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac"
+            class="ids-alert-sound-card__input"
+            @change="handleWarningAudioFileChange"
+          />
+          <el-button @click="triggerWarningAudioPicker">导入音频</el-button>
+          <el-button type="primary" @click="testIdsAlertSound">试听当前声音</el-button>
+          <el-button :disabled="!idsAlertCustomSoundInfo" @click="restoreDefaultIdsAlertSound">恢复默认音</el-button>
         </div>
       </div>
 
@@ -3112,6 +3297,92 @@ watch(
   color: #cbd5e1;
 }
 
+.ids-alert-sound-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 18px;
+  border: 1px solid rgba(248, 113, 113, 0.22);
+  background:
+    radial-gradient(circle at top right, rgba(248, 113, 113, 0.08), transparent 38%),
+    linear-gradient(180deg, rgba(7, 14, 28, 0.92), rgba(6, 12, 24, 0.78));
+  box-shadow: inset 0 1px 0 rgba(248, 250, 252, 0.04);
+}
+
+.ids-alert-sound-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.ids-alert-sound-card__subtitle {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  max-width: 760px;
+  color: rgba(226, 232, 240, 0.76);
+}
+
+.ids-alert-sound-card__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 1fr);
+  gap: 12px;
+}
+
+.ids-alert-sound-card__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(248, 113, 113, 0.16);
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.ids-alert-sound-card__label {
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: rgba(148, 163, 184, 0.92);
+}
+
+.ids-alert-sound-card__value {
+  font-size: 15px;
+  font-weight: 600;
+  color: #f8fafc;
+  word-break: break-word;
+}
+
+.ids-alert-sound-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 12px;
+  color: rgba(191, 219, 254, 0.7);
+}
+
+.ids-alert-sound-card__slider {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.ids-alert-sound-card__slider :deep(.el-slider) {
+  flex: 1;
+}
+
+.ids-alert-sound-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.ids-alert-sound-card__input {
+  display: none;
+}
+
 .source-ops-card {
   display: flex;
   flex-direction: column;
@@ -3206,12 +3477,20 @@ watch(
 }
 
 @media (max-width: 1280px) {
+  .ids-alert-sound-card__grid {
+    grid-template-columns: 1fr;
+  }
+
   .source-summary-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 900px) {
+  .ids-alert-sound-card__header {
+    flex-direction: column;
+  }
+
   .source-ops-card__header {
     flex-direction: column;
   }
@@ -3222,6 +3501,16 @@ watch(
 }
 
 @media (max-width: 640px) {
+  .ids-alert-sound-card__slider {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ids-alert-sound-card__actions :deep(.el-button) {
+    width: 100%;
+    margin-left: 0;
+  }
+
   .source-summary-grid {
     grid-template-columns: 1fr;
   }

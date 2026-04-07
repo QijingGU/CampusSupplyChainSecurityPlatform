@@ -1,399 +1,265 @@
 # IDS Security Center Demo Script
 
-## Demo Goal
-
 Spec reference: `specs/010-ids-strict-ai-log-audit/`
 
-Show one real end-to-end chain:
+## Demo Goal
 
-1. public upload is audit-gated (static mode without key, AI-enhanced mode with key),
-2. benign content is accepted,
-3. suspicious content is withheld into the sandbox,
-4. the sandbox can reopen and deepen the report,
-5. the resulting sample appears as a real IDS incident on the situation page,
-6. the bootstrapped external static rules can hard-block a malicious request with `403`.
+Show one real operator chain:
+
+1. 匿名上传先经过审计，再决定是否放行。
+2. 正常文件可以被放行，恶意文件会被扣留到沙箱。
+3. 高危事件会进入 IDS，并触发管理员专属弹窗与预警音。
+4. IDS、沙箱、日志审计三条线可以互相跳转并交叉核验。
+5. 静态规则库会真实拦截恶意请求并返回 `403`。
+6. 配置模型密钥后，可以对拦截事件和沙箱样本发起真实 AI 研判。
 
 ## Demo Setup
 
-- Preferred on Windows: run `start-ids-dev.bat` from the repo root, or run
-  `powershell -ExecutionPolicy Bypass -File .\start-ids-dev.ps1`.
-- The quick-start launcher opens backend and frontend in separate windows,
-  asks for the AI launch mode before opening the backend window, auto-picks
-  backend port `8166` or `8167`, and initializes `backend/supply_chain.db` if
-  it does not exist yet.
-- Quick start also writes `.ids-dev-processes.json` so `stop-ids-dev.bat` /
-  `powershell -ExecutionPolicy Bypass -File .\stop-ids-dev.ps1` can close the
-  exact demo windows and child processes after the session.
-- The anonymous upload page now uses the same dynamic backend probing path as
-  the authenticated frontend API client, so local demos from `5174` talk to
-  the live `8167/8166` backend instead of a stale Vite proxy target.
-- Backend running on `127.0.0.1:8166` or `127.0.0.1:8167`
-- Frontend running on `127.0.0.1:5173` or `127.0.0.1:5174`
-- Admin account ready: `system_admin / 123456`
-- Three tabs ready:
-  - `/upload`
-  - `/security/log-audit`
-  - `/security/sandbox`
-  - `/security/ids`
-  - `/security/situation`
-- Demo files ready:
-  - `tmp/codex-note.txt`
-  - `tmp/codex-webshell.php`
+- Windows 推荐直接在仓库根目录运行 `start-ids-dev.bat`
+- 或运行 `powershell -ExecutionPolicy Bypass -File .\start-ids-dev.ps1`
+- 快捷启动会：
+  - 分别打开后端和前端窗口
+  - 自动选择后端端口 `8166` 或 `8167`
+  - 自动选择前端端口 `5173` 或 `5174`
+  - 启动前询问是否启用 AI 模式
+  - 只让演示者选择 `deepseek` 或 `kimi` 并输入 API Key，其余 base URL 和默认模型名自动补全
+- 停止演示时运行 `stop-ids-dev.bat`
 
-## Scene 0 - Startup Mode Selection (Static / AI)
+## Required Tabs
 
-**Action**
+- `/upload`
+- `/security/ids`
+- `/security/sandbox`
+- `/security/log-audit`
+- `/security/situation`
 
-- Preferred for demos: launch the stack with `start-ids-dev.bat`.
-- Start the backend via `python init_db.py` / `uvicorn app.main:app --reload --host 127.0.0.1 --port 8166`.
-- If `8166` is occupied on the demo machine, switch to `8167` and keep the front-end on the same backend base URL.
-- In quick start, answer the launcher prompt asking whether to enable AI mode now.
-- If you choose `yes`, select `deepseek` or `kimi`, paste the API key, and let the system auto-fill the base URL plus default model name.
-- If you choose `no`, continue in static audit mode immediately.
+## Demo Materials
 
-**What To Say**
+- 正常文件：`tmp/codex-note.txt`
+- 恶意文件：`tmp/codex-webshell.php`
+- 可选自定义预警音：任意短音频，例如 `output/ids-alert-test.wav`
+- 管理员账号：`system_admin / 123456`
 
-- Highlight this prompt as an explicit mode switch, not a hidden behavior:
-  - no key/config => static audit mode (heuristic + indicator-based),
-  - key/config ready => AI-enhanced audit mode (LLM + static guardrail).
-- Emphasize that both modes are real and auditable, and the response payload marks `analysis_mode` clearly.
+## Important Prep Note
 
-**Expected Result**
+- 先用 `system_admin` 打开 `/security/ids`
+- 如果要演示自定义预警音，先在页面里的“管理员预警声音”面板导入音频并点一次“试听当前声音”
+- 这一页首次打开时会把当前已有的高危未归档事件记成基线，不会把历史 backlog 当成新攻击反复弹窗
+- 之后只有新产生的高危事件才会触发管理员弹窗
 
-- Backend startup logs and `/api/health` show whether AI is configured.
-- Uploads work in both modes, and the audit result exposes the active mode.
-
-## Scene 1 - Explain The New Upload Gate
+## Scene 0 - Choose Static Or AI Mode
 
 **Action**
 
-- Open `/upload`
-- Point at the page copy that explains "static or AI-enhanced audit before release".
+- 启动快捷脚本
+- 观察脚本在启动前询问是否启用 AI
+- 如果选择启用，选择 `deepseek` 或 `kimi` 并输入 API Key
+- 如果不启用，直接以静态模式启动
 
 **What To Say**
 
-“现在匿名上传不是直接落盘了，所有文件都会先经过审计。没配置密钥时走静态审计，配置后自动启用 AI 增强审计。通过的文件进入公开放行区，不通过的文件直接扣留到安全沙箱。”
+“这里不是假 AI。没配密钥时，系统走静态审计模式；配了密钥后，系统才会启用真实 AI 研判。两种模式都会明确写在结果里，不会混着说。”
 
 **Expected Result**
 
-- The page clearly explains the gate.
-- The operator can see this is no longer a frontend-only warning.
+- `/api/health` 能看出当前是否启用 AI
+- 上传、IDS 事件、沙箱报告里都能看到当前模式是 `static_only` 或 `llm_assisted`
+
+## Scene 1 - Arm The Admin Alert Flow
+
+**Action**
+
+- 登录 `system_admin`
+- 进入 `/security/ids`
+- 指给观众看管理员专属的“管理员预警声音”面板
+- 演示：
+  - 开关声音
+  - 调整音量
+  - 导入自定义音频
+  - 点击“试听当前声音”
+
+**What To Say**
+
+“管理员现在不仅能收到高危事件弹窗，还能自定义预警音。这个声音不是写死的，每次新的高危事件弹出时都会真实播放。”
+
+**Expected Result**
+
+- 只有 `system_admin` 能看到这个声音面板
+- 自定义音频可以导入、保存、试听、恢复默认音
+- 当前页建立好弹窗基线后，接下来只对新攻击弹一次
 
 ## Scene 2 - Upload A Benign File
 
 **Action**
 
-- Upload `tmp/codex-note.txt`
+- 打开 `/upload`
+- 上传 `tmp/codex-note.txt`
 
 **What To Say**
 
-“我们先看正常路径。低风险文本不会被误杀，系统会给出放行结论，并返回公开访问地址。”
+“先看正常链路。系统不是一刀切拦所有文件，低风险文件会被正常放行。”
 
 **Expected Result**
 
-- The UI shows an accepted result.
-- The audit summary shows a low-risk/pass decision.
-- A public file URL is returned.
-- The file does not appear in the sandbox.
+- 页面显示放行结果
+- 返回公开访问地址
+- 文件不会出现在沙箱里
+- 不会触发管理员高危弹窗
 
-## Scene 3 - Upload A Suspicious File
+## Scene 3 - Upload A Malicious File And Trigger Admin Alert
 
 **Action**
 
-- Upload `tmp/codex-webshell.php`
+- 再上传 `tmp/codex-webshell.php`
+- 保持管理员的 `/security/ids` 标签页处于打开状态
 
 **What To Say**
 
-“再看可疑路径。这个样本包含典型 WebShell 信号，所以不会被公开放行，而是直接被上传审计链路扣留；如果当前启用了密钥，这里会显示 AI 增强审计，否则会明确显示静态审计模式。”
+“这次样本包含明显的 WebShell 信号，所以它不会被公开放行，而是直接被扣留到沙箱，并同步生成真实 IDS 事件。”
 
 **Expected Result**
 
-- The UI shows a withheld result.
-- The page stays in the quarantined state only; it should not also show a fake
-  `上传审计执行失败 / 网络错误` panel for the same upload.
-- The dialog shows verdict, risk level, and confidence.
-- The upload result explains why the file was held and whether the verdict came
-  from `static_only` or `llm_assisted` mode.
-- No public accepted-file URL is returned.
-- If two high-risk upload events are queued back-to-back, closing the first
-  popup should not immediately show the second one; the next popup should wait
-  at least 10 seconds before appearing.
-- If a `system_admin` session is already open, the global IDS popup should
-  appear within one polling cycle for the new high-risk upload event and show
-  `关闭` / `今日不再弹出` / `跳转 IDS 页面`. Non-admin sessions should not
-  receive the popup.
+- 上传页显示文件已被扣留或隔离
+- 不会再出现同一次上传既被扣留又额外冒出假网络错误面板的情况
+- `system_admin` 会收到一次高危弹窗，并播放预警音
+- 非管理员账号不会收到这个弹窗
+- 如果当前管理员已经在 `/security/ids`
+  - 弹窗动作按钮应显示为 `定位当前事件`
+  - 点击后留在 `/security/ids`
+  - 只在页内打开该事件详情
+  - 不再跳到 `?report=1`
+  - 不会因此重复触发报告生成或再次分析
+- 如果连续制造两次高危攻击
+  - 每个新事件各弹一次
+  - 关闭或定位当前弹窗后，下一个队列事件立即出现
+  - 第二个弹窗会再次播放预警音
 
-- Current validation baseline for this branch:
-  after closing one admin popup, the next queued popup should wait about
-  10 seconds before appearing, `浠婃棩涓嶅啀寮瑰嚭` should suppress the rest of that
-  browser-day, and `璺宠浆 IDS 椤甸潰` should land on the targeted
-  `/security/ids?event=<id>&report=1` route.
-
-## Scene 4 - Show The Sandbox
+## Scene 4 - Show The Sandbox Report
 
 **Action**
 
-- Switch to `/security/sandbox`
-- Find the new quarantined sample
-- Open the report or trigger the analyze action
+- 切换到 `/security/sandbox`
+- 找到刚刚被扣留的样本
+- 打开报告，或点击“重新分析”
 
 **What To Say**
 
-“安全沙箱现在读的是后端真实样本和真实报告，不再是前端临时拼出来的演示行。这里能直接看到审计结论、证据、哈希和静态分析结果。”
+“这里读的是后端真实落盘的样本和报告，不是前端临时拼出来的演示文本。为什么被拦、命中了什么、风险等级是多少，都能在这里看到。”
 
 **Expected Result**
 
-- The sample is present in the quarantine table.
-- The row shows verdict, risk, confidence, summary, and current analysis mode.
-- The report drawer shows `Why This File Was Held`, SHA-256, matched indicators
-  with detail, analysis mode, provider, and all recommended actions.
+- 样本出现在沙箱列表中
+- 报告里能看到：
+  - 风险等级
+  - 置信度
+  - SHA-256
+  - 命中的静态指标
+  - 持有原因
+  - 当前分析模式
+  - 推荐处置动作
+- 如果启用了 AI，可继续发起真实 AI 分析
 
-## Scene 5 - Review The IDS Log Audit Feed
+## Scene 5 - Show The IDS Event Detail
 
 **Action**
 
-- Open `/security/log-audit`.
-- Filter for the recent `ids_upload_quarantine` or `ids_upload_release` action and the target file, or search by `saved_as`.
+- 回到 `/security/ids`
+- 打开刚才那条上传关联事件
 
 **What To Say**
 
-- Point out that every upload decision, source sync, or status change now emits a log entry that records the user, action, and timestamp so nothing is hidden in a demo stub.
-- Emphasize that you can see the same `save_as` sample and its audit mode/verdict there, which proves the system is real and auditable.
+“现在 IDS 不是只有一条告警标题。这里能直接看到攻击类型、命中证据、上传审计链路、攻击包和规则来源，事件与沙箱是串起来的。”
 
 **Expected Result**
 
-- The log table shows the upload gate entry, including the operator and the `upload_trace` target, along with follow-up sandbox or IDS actions such as `ids_sandbox_analyze`.
-- Filtering the feed highlights the quarantined sample, proving the audit trail matches the uploaded file from Scene 3.
+- 事件详情里能看到上传证据链
+- 上传类事件能直接跳回对应沙箱报告
+- 如果事件来自请求拦截，还能看到：
+  - `Matched Static Rules`
+  - `Attack Packet`
+  - `Decision Source`
+  - 可选 AI 研判结果
 
-## Scene 6 - Show IDS Event Evidence And Jump Back To Sandbox
+## Scene 6 - Show The Log Audit Trail
 
 **Action**
 
-- Switch to `/security/ids`
-- Open the latest malware / upload-gate incident
-- Point at the new `Upload Audit Trace` block
-- Click `打开沙箱报告`
+- 打开 `/security/log-audit`
+- 用 `ids_upload_quarantine`、`ids_upload_release`、`ids_sandbox_analyze` 或 `saved_as` 搜索
 
 **What To Say**
 
-“这一步把原来分散的页面真正串起来了。现在 IDS 事件详情里不只是看到一条告警，而是能直接看到上传样本编号、哈希、审计模式和审计结论，再一键跳回对应的沙箱报告。”
+“这里是 IDS 独立日志审计面。上传放行、上传扣留、沙箱分析、规则源同步、事件处置，都会留下真实审计记录。”
 
 **Expected Result**
 
-- The IDS event drawer shows `Upload Audit Trace`.
-- The drawer shows `saved_as`, original filename, SHA-256, and audit summary.
-- Clicking `打开沙箱报告` opens the exact quarantined sample report in
-  `/security/sandbox`.
+- 能查到刚才上传和沙箱分析对应的操作日志
+- 能看到谁做的、做了什么、什么时候做的
+- 日志和 IDS 事件、沙箱样本能互相对上
 
-## Scene 7 - Show IDS Situation Linkage
+## Scene 7 - Explain The Situation Screen Boundary
 
 **Action**
 
-- Switch to `/security/situation`
+- 打开 `/security/situation`
 
 **What To Say**
 
-“被扣留的上传不只是停在沙箱里，它还会生成真实的 IDS 事件。所以态势页里能看到同一条链路对应的实时告警、阻断统计和最近事件。”
-- Mention that this screen is purely observational for the slice and was left untouched, reinforcing that the new content lives inside the upload/log-audit flows.
+“这个页面还是偏展示和态势观察，它不是这轮收口的重点。真正落地的内容在上传、IDS、沙箱、日志审计这几条线里。”
 
 **Expected Result**
 
-- Counters refresh from backend data.
-- The recent incident feed contains the malware/WebShell event.
-- The map disclaimer states that locations are derived from incident IPs.
+- 能看到真实事件驱动的计数和近期攻击卡片
+- 演示时明确说明该页是观察视图，不是这轮验收重点
 
-## Scene 8 - Close The Loop
+## Extension A - Show Static Rule Blocking With 403
 
-**Action**
+### Action
 
-- Return to `/security/sandbox`
-- Mention delete/preserve options and refresh-safe report reopening
-
-**What To Say**
-
-“这条链路已经把上传、审计、隔离、分析、事件和态势串起来了。现在这个 IDS 演示不只是前端效果，而是接近真实的安全处置闭环。”
-
-**Expected Result**
-
-- The audience sees one coherent workflow instead of disconnected demo pages.
-- After the demo, run `stop-ids-dev.bat` so the quick-started frontend/backend
-  windows and their child processes are closed together.
-
-## Backup Talking Points
-
-- Safe files still work, the system is not blocking everything.
-- Local replay on 2026-04-07 confirmed the popup behavior with real upload
-  incidents: two quarantined PHP uploads produced events `#77` and `#76`,
-  `system_admin` saw them sequentially with about `10.67s` between close and
-  the next popup, and `logistics_admin` remained popup-free during a 12-second
-  watch window after a later high-risk upload.
-- The admin-only high-risk popup is sourced from the same blocked/unarchived
-  IDS queue shown in `/security/ids`; closing one alert will not immediately
-  spam the operator because queued popups are rate-limited to one every 10
-  seconds, and `今日不再弹出` suppresses the rest of the day for that browser.
-- Format-aware audit now distinguishes real document/image containers from suspicious binary payloads, so normal `docx/png/pdf` uploads are not blocked just because they are binary files.
-- `review` and `quarantine` both enter the sandbox, so operators can hold and
-  inspect suspicious uploads before release.
-- The request-side IDS matcher is now real too. Baseline SQLi/XSS/path-traversal/command-injection probes are scored by the in-process engine, while activated trusted `web` rule packages can add runtime matches with source attribution.
-- The situation page is driven by real incidents, but the map positions are
-  approximate derived visualization, not exact geo-IP intelligence.
-- The Security IDS page no longer exposes hidden demo triggers, and the
-  Security Situation page remains the only observational visualization slice.
-
-## Demo Extension - Real IDS Source Sync
-
-### Setup
-
-- Keep the same stack and admin account from the main demo.
-- Ensure the IDS source fixture exists:
-  - `backend/app/data/ids_source_sync/suricata-web-prod.manifest.json`
-  - `backend/app/data/ids_source_sync/suricata-web-prod.rules`
-- Open `/security/ids`.
-
-### Scene 7 - Show That Rule Source Sync Is No Longer A Stub
-
-**Action**
-
-- Point at the `Suricata Web Prod` row.
-- Highlight the visible sync endpoint path in the source column.
-
-**What To Say**
-
-“这块以前更像状态牌，现在每个真正可同步的规则源都带着可执行的 `sync_endpoint`。也就是说安全中心看到的不再只是说明文字，而是一个真实会去读取 manifest 的同步目标。”
-
-**Expected Result**
-
-- The row shows `app/data/ids_source_sync/suricata-web-prod.manifest.json`.
-- The latest sync section shows a real package version and resolved manifest path.
-
-### Scene 8 - Trigger One More Real Sync
-
-**Action**
-
-- Click `执行同步`.
-
-**What To Say**
-
-“我现在手动触发一次规则源同步。后端会实际读取本地 manifest 和规则文件，算出版本、规则条数、文件大小和 SHA-256，而不是像以前那样只把状态改成成功。”
-
-**Expected Result**
-
-- The row updates to a fresh successful sync time.
-- The latest sync detail references the manifest and rule artifact.
-- The package preview area shows the refreshed ET Open-derived rule count and the shortened SHA-256.
-
-### Scene 9 - Open History And Show Sync Audit
-
-**Action**
-
-- Click `历史`.
-
-**What To Say**
-
-“历史弹窗现在不只是看规则包了，还能看到同步审计本身。这里能把谁触发的、读了哪个 manifest、导入了哪个版本、结果是什么，一次性串起来。”
-
-**Expected Result**
-
-- `Sync Audit` shows the latest result, timestamp, operator, detail, and manifest path.
-- Package intake history shows the same `2026.04.07` package plus the persisted intake detail.
-
-## Demo Extension - Runtime Request Matching
-
-### Setup
-
-- Keep `/security/ids` open on the latest incident list.
-- Make sure the `suricata-web-prod` package is already activated from the source-sync demo extension.
-
-### Scene 10 - Show That Runtime Matching Is No Longer Inline-only
-
-**Action**
-
-- Visit one of these runtime probes:
-  - `GET /.env`
-  - `GET /login?user=${jndi:ldap://demo/a}`
-  - `GET /proxy.php?url=<script>alert(1)</script>`
-- Return to `/security/ids` and open the newest event.
-
-**What To Say**
-
-“这里不是只做上传审计。运行时请求本身也会经过 IDS 匹配。现在激活的是从官方 ET Open 规则包同步下来的静态规则集，所以这条事件会明确标注命中的规则源、版本和规则 ID，而且事件详情里能直接看到攻击包和静态证据链。”
-
-**Expected Result**
-
-- The request is blocked with HTTP `403`.
-- The newest IDS event is attributed to the activated `suricata-web-prod` package.
-- The event shows `detector_name=suricata-web-prod`, the imported package version, the matched `sid`, an `Attack Packet` block, and the matched static-rule chain.
-- If AI is configured, the same blocked event also shows an `AI Analysis` block; if not, the report explicitly stays in static mode.
-
-### Source Sync Talking Points
-
-- This slice keeps sync local and reproducible first, not network-heavy.
-- `scheduled` still means scheduler-managed metadata; this demo focuses on making
-  the manual sync path real and reviewable.
-- The same source row now carries enough context for review: sync endpoint,
-  package version, rule count, shortened hash, and audit history.
-
-## Demo Extension - Activated Package Enters Runtime IDS
-
-### Setup
-
-- Finish the real source sync flow above and make sure the latest
-  `suricata-web-prod` package is activated.
-- Keep `/security/ids` open.
-- Keep a terminal ready for:
+- 在终端执行下面任意一个探针：
   - `curl "http://127.0.0.1:8166/.env"`
   - `curl "http://127.0.0.1:8166/login?user=%24%7Bjndi%3Aldap%3A%2F%2Fdemo%2Fa%7D"`
   - `curl --path-as-is "http://127.0.0.1:8166/proxy.php?url=%3Cscript%3Ealert(1)%3C%2Fscript%3E"`
-  - or replace `8166` with `8167` if quick start selected the alternate backend port
+- 如果本机后端跑在 `8167`，把端口替换成 `8167`
+- 然后回到 `/security/ids` 打开最新事件
 
-### Scene 10 - Explain The Last Closed Loop
+### What To Say
 
-**Action**
+“这里不是自己重写一套玩具规则，而是接入了实际启用的静态规则包。恶意请求会被真实拦截成 `403`，并把命中的规则、攻击包和处置依据完整记下来。”
 
-- Point at the active package version on the `Suricata Web Prod` row.
+### Expected Result
 
-**What To Say**
+- 请求直接返回 `403`
+- 最新 IDS 事件里能看到：
+  - `detector_name=suricata-web-prod`
+  - 匹配到的规则 ID 或规则名
+  - `Attack Packet`
+  - 静态规则命中链
+- 如果配置了 AI，还可以在该事件上继续发起真实 AI 研判
 
-“现在补上的不是又一个状态字段，而是最后这段闭环。激活后的 `web` 规则包会进入运行时检测缓存，后面命中的事件会直接带真实规则源、版本、规则 ID 和攻击包证据链。”
+## Extension B - Show Real Source Sync
 
-**Expected Result**
+### Action
 
-- The row shows an active package version for `suricata-web-prod`.
-- The audience understands activation now affects runtime detection, not only history records.
+- 留在 `/security/ids`
+- 找到 `Suricata Web Prod`
+- 点击同步或打开历史
 
-### Scene 11 - Fire One Runtime Probe
+### What To Say
 
-**Action**
+“这里不是元数据摆设。规则源同步会真正读取本地 manifest 和规则文件，算出版本、规则条数、文件大小和 SHA-256，并留下同步审计。”
 
-- Run `curl "http://127.0.0.1:8166/runtime-probe?sample=../etc/passwd"` or `curl "http://127.0.0.1:8167/runtime-probe?sample=../etc/passwd"`.
+### Expected Result
 
-**What To Say**
+- 源行里能看到 `sync_endpoint`
+- 同步结果里能看到版本、规则数、哈希摘要
+- 历史里能看到 `Sync Audit`
 
-“这里我发一个真实的恶意探针。现在它不会只是记录一条事件，而是会被启用的 ET Open 静态规则包真正拦截，直接返回 403。”
+## Backup Talking Points
 
-**Expected Result**
-
-- The request returns HTTP `403`.
-- A new IDS event is recorded with the matched-rule chain and block score.
-
-### Scene 12 - Show Runtime Provenance
-
-**Action**
-
-- Refresh the IDS event list or open the latest event details.
-
-**What To Say**
-
-“关键点不是有没有再弹一个提示，而是事件来源变了。现在这里能看到 `suricata-web-prod`、包版本 `2026.04.07`、命中的规则 id、攻击包预览，以及是否走到 AI 研判。”
-
-**Expected Result**
-
-- The latest IDS event shows `detector_name=suricata-web-prod`.
-- The event shows `source_version=2026.04.07`.
-- The event shows the matched `source_rule_id`, the `Attack Packet` block, the block score vs threshold, and the optional AI analysis mode.
-
-### Runtime Activation Talking Points
-
-- This is a lightweight runtime bridge for activated `web` artifacts, not a full Suricata execution engine.
-- 在当前本地演示里，启动阶段会自动引导并激活 `suricata-web-prod`，所以请求侧展示的就是外部规则包命中链，而不是空规则状态。
-- `scheduled` sync automation and non-`web` runtime execution remain later work.
+- 没配模型密钥时，系统仍然可演示静态规则、文件拦截、403 阻断、日志审计和事件闭环
+- 配了模型密钥后，再演示 IDS 事件 AI 研判和沙箱 AI 分析
+- 管理员弹窗是管理员专属能力，不会广播给普通角色
+- 弹窗不是定时轮播旧数据，而是只对新事件触发
+- 如果已经在 `/security/ids`，弹窗动作是页内定位，不是重复跳转和重复分析
+- 自定义预警音是持久化的，刷新页面后仍然保留
