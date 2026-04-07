@@ -105,6 +105,13 @@ Spec references:
     next queued event, `今日不再弹出` suppresses the rest of the day for that
     browser, `跳转 IDS 页面` lands on the targeted report route, and
     `logistics_admin` does not receive the popup.
+- Follow-up live validation on the same branch rechecked the exact admin alert
+  controls with current incidents:
+  - `system_admin` received the next popup about `10.327s` after closing the
+    first one
+  - `浠婃棩涓嶅啀寮瑰嚭` stayed silent for the next 12 seconds of observation
+  - `璺宠浆 IDS 椤甸潰` landed on `/security/ids?event=87&report=1`
+  - `logistics_admin` still saw no popup during a 15-second watch window
 - Documentation sync for the still-open IDS branch package:
   - refreshed `README.md` so the shipped security-center slice now explicitly
     mentions `/security/log-audit`, request-side runtime matching, upload trace

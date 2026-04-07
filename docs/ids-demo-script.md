@@ -120,6 +120,12 @@ Show one real end-to-end chain:
   `关闭` / `今日不再弹出` / `跳转 IDS 页面`. Non-admin sessions should not
   receive the popup.
 
+- Current validation baseline for this branch:
+  after closing one admin popup, the next queued popup should wait about
+  10 seconds before appearing, `浠婃棩涓嶅啀寮瑰嚭` should suppress the rest of that
+  browser-day, and `璺宠浆 IDS 椤甸潰` should land on the targeted
+  `/security/ids?event=<id>&report=1` route.
+
 ## Scene 4 - Show The Sandbox
 
 **Action**
