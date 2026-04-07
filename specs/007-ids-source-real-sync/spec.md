@@ -23,7 +23,7 @@ A maintainer triggers source sync and the backend reads a real local manifest an
 rule artifact, computes package metadata, and records a new sync attempt.
 
 **Independent Test**: trigger sync for `suricata-web-prod` and verify the result
-returns `package_version=2026.04.06`, `rule_count=4`, the artifact path, and a
+returns `package_version=2026.04.07`, `rule_count=15`, the artifact path, and a
 SHA-256 value.
 
 ### User Story 3 - Review Sync Audit And Package Intake (Priority: P1)
@@ -41,7 +41,9 @@ A collaborator can reproduce the same real sync locally from the repo fixture an
 understand what remains out of scope.
 
 **Independent Test**: follow `quickstart.md`, use the bundled fixture files, and
-confirm the same IDS source row is populated from local artifacts.
+confirm the same IDS source row is populated from local artifacts, then verify a
+fresh backend startup bootstraps the fixture into a visible source/package state
+without requiring external network access.
 
 ## Edge Cases
 
@@ -55,6 +57,9 @@ confirm the same IDS source row is populated from local artifacts.
   or failed without faking success.
 - Repeated manual syncs import the same package version and should still leave an
   auditable sync attempt instead of silently doing nothing.
+- Fresh or reset local environments must still expose one reviewable external
+  rule source after startup, even before an operator manually opens the IDS
+  source panel.
 
 ## Requirements
 
@@ -77,7 +82,10 @@ confirm the same IDS source row is populated from local artifacts.
   package metadata, and the resulting Sync Audit history.
 - **FR-008**: The bundled fixture manifest and rule file MUST be usable for local
   validation and demo runs.
-- **FR-009**: This slice MUST remain scoped to IDS/security-center/backend sync
+- **FR-009**: Fresh/offline environments MUST bootstrap the bundled external
+  static rule fixture into a reviewable source/package state without external
+  network access.
+- **FR-010**: This slice MUST remain scoped to IDS/security-center/backend sync
   paths plus supporting docs/specs.
 
 ### Key Entities
@@ -89,6 +97,8 @@ confirm the same IDS source row is populated from local artifacts.
 - **Artifact-Backed Package Intake**: preview/intake row including version,
   provenance, artifact path, artifact hash, artifact size, and derived rule
   count.
+- **Bootstrap Runtime Fixture**: startup-created trusted source/package state
+  backed by the bundled local manifest/rule artifact.
 
 ## Success Criteria
 
@@ -112,7 +122,7 @@ confirm the same IDS source row is populated from local artifacts.
 - API validation passed on 2026-04-06:
   - created or reused `suricata-web-prod`,
   - triggered real sync from `app/data/ids_source_sync/suricata-web-prod.manifest.json`,
-  - received `package_version=2026.04.06`, `rule_count=4`,
+  - received `package_version=2026.04.07`, `rule_count=15`,
     `artifact_path=backend/app/data/ids_source_sync/suricata-web-prod.rules`,
     and a persisted SHA-256.
 - Browser validation passed with gstack on 2026-04-06:

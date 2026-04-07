@@ -1,6 +1,7 @@
 """IDS management API for review, reporting, and security-center workflows."""
 from __future__ import annotations
 
+import ast
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 import hashlib
@@ -302,7 +303,7 @@ def get_ids_event(
     row = db.query(IDSEvent).filter(IDSEvent.id == event_id).first()
     if not row:
         raise HTTPException(status_code=404, detail="IDS event not found")
-    return {"item": _serialize_ids_event(row)}
+    return {"item": _serialize_ids_event(row, detail=True)}
 
 
 @router.get("/stats")
@@ -1199,6 +1200,10 @@ def get_event_report(
         run_ai_analysis_sync(event_id)
         evt = _get_event_or_404(db, event_id)
 
+    hits = _extract_event_hits(evt)
+    packet = _build_request_packet(evt)
+    ai_meta = _ai_status(evt)
+    decision_basis = _decision_basis(evt, hits)
     upload_trace = _extract_upload_trace(evt)
     report = {
         "event_id": evt.id,
@@ -1227,6 +1232,10 @@ def get_event_report(
             "body_snippet": (evt.body_snippet or "")[:500],
             "user_agent": (evt.user_agent or "")[:500],
         },
+        "packet": packet,
+        "matched_hits": hits,
+        "decision_basis": decision_basis,
+        "ai_status": ai_meta,
         "response": {
             "blocked": bool(evt.blocked),
             "firewall_rule": evt.firewall_rule or "",
@@ -1247,6 +1256,14 @@ def get_event_report(
         "upload_trace": upload_trace,
         "ai_analysis": evt.ai_analysis or "",
     }
+    matched_rule_lines = "".join(
+        (
+            f"- {hit.get('source_rule_id') or '-'} / {hit.get('source_rule_name') or '-'} "
+            f"[{hit.get('detector_name') or '-'} {hit.get('source_version') or '-'}] "
+            f"matched {hit.get('matched_part') or 'request'} => {hit.get('matched_value') or hit.get('signature_matched') or '-'}\n"
+        )
+        for hit in hits[:8]
+    ) or "- No structured hit chain captured.\n"
     markdown = (
         "# IDS Incident Report\n\n"
         f"- Event ID: {evt.id}\n"
@@ -1257,15 +1274,30 @@ def get_event_report(
         f"- Detector: {evt.detector_name or '-'}\n"
         f"- Path: {evt.method} {evt.path}\n"
         f"- Risk Score: {int(evt.risk_score or 0)} / 100\n"
+        f"- Block Threshold: {int(settings.IDS_BLOCK_THRESHOLD)} / 100\n"
         f"- Confidence: {int(evt.confidence or 0)} / 100\n"
         f"- Hit Count: {int(evt.hit_count or 0)}\n"
         f"- Blocked: {'yes' if evt.blocked else 'no'}\n"
         f"- Firewall Rule: {evt.firewall_rule or '-'}\n\n"
+        "## Decision Basis\n"
+        f"- Final Source: {decision_basis.get('final_source')}\n"
+        f"- Static Source: {decision_basis.get('static_source_label')}\n"
+        f"- Analysis Mode: {decision_basis.get('analysis_mode_label')}\n"
+        f"- Mode Reason: {decision_basis.get('mode_reason')}\n"
+        f"- AI Available: {'yes' if ai_meta.get('ai_available') else 'no'}\n"
+        f"- LLM Used: {'yes' if ai_meta.get('llm_used') else 'no'}\n\n"
         "## Evidence\n"
         f"- Signature: {evt.signature_matched or '-'}\n"
         f"- Query: {(evt.query_snippet or '-')[:500]}\n"
         f"- Body: {(evt.body_snippet or '-')[:500]}\n"
+        f"- Headers: {(evt.headers_snippet or '-')[:500]}\n"
         f"- User-Agent: {(evt.user_agent or '-')[:300]}\n\n"
+        "## Matched Static Rules\n"
+        f"{matched_rule_lines}\n"
+        "## Attack Packet\n"
+        "```http\n"
+        f"{packet.get('raw_request') or '-'}\n"
+        "```\n\n"
         + (
             "## Upload Audit Trace\n"
             f"- Saved As: {upload_trace.get('saved_as') or '-'}\n"
@@ -1273,15 +1305,16 @@ def get_event_report(
             f"- Audit Verdict: {((upload_trace.get('audit') or {}).get('verdict')) or '-'}\n"
             f"- Audit Risk: {((upload_trace.get('audit') or {}).get('risk_level')) or '-'}\n"
             f"- Audit Confidence: {int(((upload_trace.get('audit') or {}).get('confidence')) or 0)}\n"
+            f"- Analysis Mode: {((upload_trace.get('audit') or {}).get('analysis_mode_label')) or '-'}\n"
             f"- Summary: {((upload_trace.get('audit') or {}).get('summary')) or '-'}\n\n"
             if upload_trace
             else ""
         )
-        + 
-        "## AI Analysis\n"
-        f"- Risk Level: {evt.ai_risk_level or 'unknown'}\n"
-        f"- AI Confidence: {int(evt.ai_confidence or 0)}\n\n"
-        f"{evt.ai_analysis or 'No AI analysis available.'}\n"
+        + "## AI Analysis\n"
+        + f"- Risk Level: {evt.ai_risk_level or 'unknown'}\n"
+        + f"- AI Confidence: {int(evt.ai_confidence or 0)}\n"
+        + f"- Analysis Mode: {ai_meta.get('analysis_mode_label')}\n\n"
+        + f"{evt.ai_analysis or 'AI is not configured or analysis has not been run for this blocked request.'}\n"
     )
     return {"report": report, "markdown": markdown}
 
@@ -1866,6 +1899,174 @@ def _safe_parse_json_object(raw: str | None) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _safe_parse_json_list(raw: str | None) -> list[Any] | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, list) else None
+
+
+def _parse_headers_snippet(raw: str | None) -> list[dict[str, str]]:
+    text = (raw or "").strip()
+    if not text:
+        return []
+    try:
+        payload = ast.literal_eval(text)
+    except (SyntaxError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        return [
+            {
+                "name": str(key).strip()[:64],
+                "value": str(value).strip()[:255],
+            }
+            for key, value in list(payload.items())[:12]
+            if str(key).strip()
+        ]
+    return [{"name": "raw", "value": text[:255]}]
+
+
+def _request_match_context(pattern: str, row: IDSEvent) -> tuple[str, str]:
+    needle = (pattern or "").strip()
+    if not needle:
+        return "", ""
+    lowered = needle.lower()
+    candidates = [
+        ("path", row.path or ""),
+        ("query", row.query_snippet or ""),
+        ("body", row.body_snippet or ""),
+        ("headers", row.headers_snippet or ""),
+        ("user_agent", row.user_agent or ""),
+    ]
+    for part, source in candidates:
+        haystack = str(source or "")
+        pos = haystack.lower().find(lowered)
+        if pos < 0:
+            continue
+        start = max(0, pos - 60)
+        end = min(len(haystack), pos + len(needle) + 120)
+        return part, haystack[start:end]
+    return "", ""
+
+
+def _extract_event_hits(row: IDSEvent) -> list[dict[str, Any]]:
+    payload = _safe_parse_json_list(row.detect_detail)
+    if not payload:
+        return []
+    hits: list[dict[str, Any]] = []
+    for index, item in enumerate(payload[:12], start=1):
+        if not isinstance(item, dict):
+            continue
+        pattern = str(item.get("pattern") or "")[:255]
+        matched_part, matched_value = _request_match_context(pattern, row)
+        hits.append(
+            {
+                "id": f"{row.id}-{index}",
+                "attack_type": str(item.get("attack_type") or row.attack_type or "")[:64],
+                "pattern": pattern[:120],
+                "signature_matched": str(item.get("signature_matched") or pattern)[:160],
+                "weight": max(0, min(100, int(item.get("weight") or 0))),
+                "runtime_priority": int(item.get("runtime_priority") or 0),
+                "source_classification": str(item.get("source_classification") or row.source_classification or "")[:32],
+                "detector_family": str(item.get("detector_family") or row.detector_family or "")[:32],
+                "detector_name": str(item.get("detector_name") or row.detector_name or "")[:64],
+                "source_rule_id": str(item.get("source_rule_id") or row.source_rule_id or "")[:128],
+                "source_rule_name": str(item.get("source_rule_name") or row.source_rule_name or "")[:128],
+                "source_version": str(item.get("source_version") or row.source_version or "")[:64],
+                "source_freshness": str(item.get("source_freshness") or row.source_freshness or "")[:16],
+                "matched_part": matched_part,
+                "matched_value": matched_value[:255],
+            }
+        )
+    return hits
+
+
+def _build_request_packet(row: IDSEvent) -> dict[str, Any]:
+    query_string = (row.query_snippet or "")[:500]
+    method = (row.method or "GET").upper()
+    path = (row.path or "")[:512]
+    request_target = path or "/"
+    if query_string and "?" not in request_target:
+        request_target = f"{request_target}?{query_string[:240]}"
+    request_line = f"{method} {request_target[:420]} HTTP/1.1"
+    headers = _parse_headers_snippet(row.headers_snippet)
+    body = (row.body_snippet or "")[:500]
+    header_lines = [f"{item['name']}: {item['value']}" for item in headers[:12]]
+    if not header_lines and (row.user_agent or "").strip():
+        header_lines.append(f"User-Agent: {(row.user_agent or '')[:240]}")
+    raw_request = "\n".join([request_line, *header_lines, "", body]).strip()
+    return {
+        "request_line": request_line,
+        "method": method,
+        "path": path,
+        "query_string": query_string,
+        "body": body,
+        "headers": headers,
+        "headers_snippet": (row.headers_snippet or "")[:1000],
+        "user_agent": (row.user_agent or "")[:240],
+        "raw_request": raw_request[:2000],
+        "body_truncated": len(row.body_snippet or "") >= 500,
+        "headers_truncated": len(row.headers_snippet or "") >= 1000,
+    }
+
+
+def _ai_status(row: IDSEvent) -> dict[str, Any]:
+    ai_available = bool(settings.IDS_AI_ANALYSIS and is_llm_available())
+    llm_used = bool((row.ai_analysis or "").strip() and row.ai_analyzed_at)
+    if llm_used:
+        analysis_mode = "llm_assisted"
+        analysis_mode_label = "Static block + AI analysis"
+        mode_reason = "analysis_completed"
+    elif ai_available:
+        analysis_mode = "static_only"
+        analysis_mode_label = "Static block, AI available"
+        mode_reason = "analysis_not_run"
+    elif settings.IDS_AI_ANALYSIS:
+        analysis_mode = "static_only"
+        analysis_mode_label = "Static block only"
+        mode_reason = "llm_not_ready"
+    else:
+        analysis_mode = "static_only"
+        analysis_mode_label = "Static block only"
+        mode_reason = "ids_ai_disabled"
+    return {
+        "analysis_mode": analysis_mode,
+        "analysis_mode_label": analysis_mode_label,
+        "mode_reason": mode_reason,
+        "llm_used": llm_used,
+        "ai_available": ai_available,
+        "ai_risk_level": row.ai_risk_level or "",
+        "ai_confidence": int(row.ai_confidence or 0),
+        "ai_analyzed_at": row.ai_analyzed_at.strftime("%Y-%m-%d %H:%M:%S") if row.ai_analyzed_at else None,
+    }
+
+
+def _decision_basis(row: IDSEvent, hits: list[dict[str, Any]]) -> dict[str, Any]:
+    ai_meta = _ai_status(row)
+    external_hits = any((hit.get("runtime_priority") or 0) > 0 for hit in hits)
+    static_source_mode = "external_runtime" if external_hits or (row.source_classification or "") == SOURCE_EXTERNAL_MATURE else "legacy_local"
+    static_source_label = "External static rules" if static_source_mode == "external_runtime" else "Local legacy signatures"
+    return {
+        "final_source": "hybrid" if ai_meta.get("llm_used") else "static",
+        "static_source_mode": static_source_mode,
+        "static_source_label": static_source_label,
+        "analysis_mode": ai_meta["analysis_mode"],
+        "analysis_mode_label": ai_meta["analysis_mode_label"],
+        "mode_reason": ai_meta["mode_reason"],
+        "static_risk_score": int(row.risk_score or 0),
+        "block_threshold": int(settings.IDS_BLOCK_THRESHOLD),
+        "rule_confidence": int(row.confidence or 0),
+        "llm_used": bool(ai_meta["llm_used"]),
+        "ai_available": bool(ai_meta["ai_available"]),
+        "ai_risk_level": row.ai_risk_level or "",
+        "ai_confidence": int(row.ai_confidence or 0),
+    }
+
+
 def _extract_upload_saved_as(body_snippet: str | None) -> str:
     snippet = body_snippet or ""
     match = re.search(r"saved_as=([^;\\s]+)", snippet)
@@ -1923,14 +2124,25 @@ def _extract_upload_trace(row: IDSEvent) -> dict[str, Any] | None:
             "provider": str(audit.get("provider") or audit.get("engine") or row.source_version or "")[:128],
             "analysis_mode": str(audit.get("analysis_mode") or "")[:32],
             "analysis_mode_label": str(audit.get("analysis_mode_label") or "")[:32],
+            "mode_reason": str(audit.get("mode_reason") or "")[:64],
             "llm_used": bool(audit.get("llm_used")),
             "ai_available": bool(audit.get("ai_available")),
+            "reasons": [
+                str(reason).strip()[:255]
+                for reason in (audit.get("reasons") or audit.get("evidence") or [])
+                if str(reason).strip()
+            ][:6],
             "recommended_actions": [
                 str(action).strip()[:255]
                 for action in (audit.get("recommended_actions") or [])
                 if str(action).strip()
             ][:5],
+            "static_risk_level": str(audit.get("static_risk_level") or "")[:32],
+            "heuristic_risk_level": str(audit.get("heuristic_risk_level") or "")[:32],
+            "heuristic_verdict": str(audit.get("heuristic_verdict") or "")[:32],
+            "linked_event_id": int(audit.get("linked_event_id") or 0) or None,
         },
+        "decision_basis": payload.get("decision_basis") if isinstance(payload, dict) and isinstance(payload.get("decision_basis"), dict) else None,
     }
 
 
@@ -2120,9 +2332,13 @@ def _summarize_sources(items: list[dict]) -> dict:
     }
 
 
-def _serialize_ids_event(row: IDSEvent) -> dict:
+def _serialize_ids_event(row: IDSEvent, *, detail: bool = False) -> dict:
     upload_trace = _extract_upload_trace(row)
-    return {
+    hits = _extract_event_hits(row) if detail else []
+    packet = _build_request_packet(row) if detail else None
+    decision_basis = _decision_basis(row, hits) if detail else None
+    ai_meta = _ai_status(row) if detail else None
+    payload = {
         "id": row.id,
         "client_ip": row.client_ip,
         "event_origin": row.event_origin or REAL_EVENT_ORIGIN,
@@ -2145,6 +2361,7 @@ def _serialize_ids_event(row: IDSEvent) -> dict:
         "query_snippet": (row.query_snippet or "")[:200],
         "body_snippet": (row.body_snippet or "")[:200],
         "user_agent": (row.user_agent or "")[:200],
+        "headers_snippet": (row.headers_snippet or "")[:1000] if detail else "",
         "blocked": row.blocked,
         "firewall_rule": row.firewall_rule or "",
         "archived": row.archived,
@@ -2163,3 +2380,10 @@ def _serialize_ids_event(row: IDSEvent) -> dict:
         "ai_confidence": int(row.ai_confidence or 0),
         "ai_analyzed_at": row.ai_analyzed_at.strftime("%Y-%m-%d %H:%M:%S") if row.ai_analyzed_at else None,
     }
+    if detail:
+        payload["matched_hits"] = hits
+        payload["request_packet"] = packet
+        payload["packet_preview"] = (packet or {}).get("raw_request") or ""
+        payload["decision_basis"] = decision_basis
+        payload["ai_status"] = ai_meta
+    return payload

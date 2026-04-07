@@ -14,7 +14,8 @@ quarantined sample metadata without guessing from raw strings.
 
 **Independent Test**: open a recent `upload_ai_gate` incident in
 `/security/ids`, then verify the drawer shows `Upload Audit Trace` with sample
-identity, SHA-256, verdict, and audit summary.
+identity, SHA-256, verdict, audit summary, and an explicit explanation of why
+the file was held.
 
 ### User Story 2 - Jump From IDS To The Exact Sandbox Report (Priority: P1)
 
@@ -31,7 +32,8 @@ not need the live UI to understand why the sample was withheld.
 
 **Independent Test**: request `GET /api/ids/events/{event_id}/report` for an
 upload-gated incident and verify both `report.upload_trace` and the markdown
-`Upload Audit Trace` section are present.
+`Upload Audit Trace` section are present, including the hold-reason summary,
+analysis mode, matched indicators, and optional AI explanation.
 
 ### User Story 4 - Keep The Slice Documented (Priority: P2)
 
@@ -61,6 +63,9 @@ to narrate the upload, IDS, and sandbox evidence chain.
 - **FR-002**: The upload-trace payload MUST preserve `saved_as`, original file
   name, SHA-256 when available, indicator summaries, audit verdict, audit risk,
   confidence, and audit summary.
+- **FR-002a**: The upload-trace/report payload MUST explain why the file was
+  held through `hold_reason_summary`, matched indicators, analysis mode, and
+  optional AI explanation fields.
 - **FR-003**: `GET /api/ids/events/{event_id}/report` MUST include
   `report.upload_trace` for upload-gated incidents.
 - **FR-004**: The generated IDS markdown report MUST include an

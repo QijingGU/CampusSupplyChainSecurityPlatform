@@ -7,6 +7,9 @@
   - with API key/LLM config, it should run AI-enhanced audit.
 - Operators and auditors also lack a focused log trail for IDS actions, so there is no single source of truth behind an upload-gate decision, source sync, or manual IDS action.
 - The public upload experience must clearly expose which mode produced the verdict so reviewers can verify behavior directly.
+- Blocked runtime IDS requests also need the same explicit `static_only` versus
+  `llm_assisted` explanation model, otherwise reviewers cannot tell whether the
+  request event was statically blocked or additionally analyzed by AI.
 
 ## User Stories
 
@@ -21,6 +24,8 @@ so that operational workflow stays usable and mode behavior is auditable.
 - Startup `app.main` prompts whether to enable AI now, lets the operator choose `deepseek` or `kimi`, asks only for the API key, auto-fills the provider base URL plus default model name, and still allows static mode when choosing not to configure AI immediately.
 - `GET /api/health` reflects the real AI readiness state used by mode selection.
 - The upload page shows one consistent terminal state per request; a quarantined result must not also surface as a rejected/network-error state for the same upload.
+- Blocked runtime IDS events expose whether AI was available, whether it was
+  actually used, and which analysis mode produced the visible explanation.
 
 ### Story 2: Prompt before you run
 
@@ -30,6 +35,8 @@ so that I can decide to enable AI now or run static mode for this startup withou
 
 **Acceptance Criteria**
 - The startup hook prints the prompt and writes the selected provider, API key, auto-filled base URL, and auto-filled default model name to `.env` before `uvicorn` listens.
+- The same startup mode now governs both sandbox/upload AI analysis and blocked
+  runtime IDS event analysis.
 - The demo script records the “Scene 0” preflight and shows both outcomes: static mode and AI-enhanced mode.
 - Documentation (changelog and demo script) mentions the new prompt so reviewers can reproduce it.
 
@@ -41,6 +48,8 @@ so I can independently verify that each gate/IDS decision is logged and cross-re
 
 **Acceptance Criteria**
 - A backend `GET /api/ids/log-audit` endpoint (or equivalent) exists, filtering `AuditLog` entries by IDS-relevant actions.
+- Log-audit review for blocked runtime IDS events can explain the attack packet,
+  matched static rules, and AI/static analysis mode from the linked event.
 - The security-center nav adds “日志审计” and the page shows cards for counts plus a table that can filter by action type, user, and outcome.
 - The log view can link back to the quarantined sample or IDS event so operators trace the chain.
 
@@ -54,7 +63,6 @@ so I can independently verify that each gate/IDS decision is logged and cross-re
 ## Out of Scope
 
 - The Security Situation map remains unchanged; it is still a visualization layer and not part of this slice.
-- This spec does not add new runtime detection behavior outside of the log audit and upload context.
 
 ## Success Metrics
 

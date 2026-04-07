@@ -12,7 +12,7 @@ from urllib.parse import unquote
 
 from ..database import SessionLocal
 from ..models.ids_source_package import IDSSourcePackageActivation
-from .ids_source_ops import SOURCE_DEMO_TEST, SOURCE_STATUS_DISABLED
+from .ids_source_ops import SOURCE_DEMO_TEST, SOURCE_STATUS_DISABLED, SOURCE_TRANSITIONAL_LOCAL
 from .ids_source_sync import SourceSyncValidationError, resolve_sync_path
 
 # Transitional local matcher retained for continuity until mature-source
@@ -196,7 +196,10 @@ def _extract_runtime_rules_from_text_line(
     detector_family: str,
     source_version: str,
 ) -> list[dict[str, object]]:
-    contents = _extract_suricata_option_values(rule_text, "content")
+    contents = [
+        *_extract_suricata_option_values(rule_text, "content"),
+        *_extract_suricata_option_values(rule_text, "uricontent"),
+    ]
     if not contents:
         return []
 
@@ -205,62 +208,124 @@ def _extract_runtime_rules_from_text_line(
     attack_type = _infer_attack_type_from_runtime_rule(f"{rule_name} {rule_text}")
     weight = _runtime_rule_weight(attack_type)
     nocase = "nocase" in rule_text.lower()
-    runtime_rules: list[dict[str, object]] = []
-    seen_patterns: set[str] = set()
+    patterns = _normalize_runtime_patterns(contents)
+    if not patterns:
+        return []
 
-    for content in contents:
-        pattern = _unescape_suricata_string(content).strip()
-        if not pattern or pattern in seen_patterns:
-            continue
-        seen_patterns.add(pattern)
-        runtime_rules.append(
-            {
-                "attack_type": attack_type,
-                "pattern": pattern[:256],
-                "signature_matched": f"{rule_id}:{pattern}"[:128],
-                "weight": weight,
-                "runtime_priority": 1,
-                "nocase": nocase,
-                "source_classification": source_classification[:32],
-                "detector_family": detector_family[:32],
-                "detector_name": source_key[:64],
-                "source_rule_id": str(rule_id)[:128],
-                "source_rule_name": str(rule_name)[:128],
-                "source_version": source_version[:64],
-                "source_freshness": "current",
-            }
-        )
-    return runtime_rules
+    signature_preview = " && ".join(patterns[:3])[:96]
+    return [
+        {
+            "attack_type": attack_type,
+            "pattern": patterns[0][:256],
+            "pattern_summary": signature_preview[:256],
+            "patterns": patterns[:12],
+            "signature_matched": f"{rule_id}:{signature_preview}"[:128],
+            "weight": weight,
+            "runtime_priority": 1,
+            "nocase": nocase,
+            "source_classification": source_classification[:32],
+            "detector_family": detector_family[:32],
+            "detector_name": source_key[:64],
+            "source_rule_id": str(rule_id)[:128],
+            "source_rule_name": str(rule_name)[:128],
+            "source_version": source_version[:64],
+            "source_freshness": "current",
+        }
+    ]
 
 
 def _extract_suricata_option_value(rule_text: str, option_name: str) -> str:
-    match = re.search(rf"{re.escape(option_name)}\s*:\s*\"((?:\\.|[^\"\\])*)\"", rule_text)
+    match = re.search(rf"\b{re.escape(option_name)}\b\s*:\s*\"((?:\\.|[^\"\\])*)\"", rule_text)
     return match.group(1) if match else ""
 
 
 def _extract_suricata_option_values(rule_text: str, option_name: str) -> list[str]:
-    return re.findall(rf"{re.escape(option_name)}\s*:\s*\"((?:\\.|[^\"\\])*)\"", rule_text)
+    return re.findall(rf"\b{re.escape(option_name)}\b\s*:\s*\"((?:\\.|[^\"\\])*)\"", rule_text)
 
 
 def _extract_suricata_numeric_value(rule_text: str, option_name: str) -> str:
-    match = re.search(rf"{re.escape(option_name)}\s*:\s*([0-9]+)", rule_text)
+    match = re.search(rf"\b{re.escape(option_name)}\b\s*:\s*([0-9]+)", rule_text)
     return match.group(1) if match else ""
 
 
+def _normalize_runtime_patterns(contents: list[str]) -> list[str]:
+    patterns: list[str] = []
+    seen: set[str] = set()
+    for content in contents:
+        decoded = _unescape_suricata_string(content).strip()
+        if not decoded:
+            continue
+        if _looks_generic_runtime_token(decoded):
+            continue
+        dedupe_key = decoded.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        patterns.append(decoded[:256])
+    return patterns
+
+
+def _looks_generic_runtime_token(value: str) -> bool:
+    token = (value or "").strip()
+    lowered = token.lower()
+    if not token:
+        return True
+    if lowered in {"get", "post", "head", "put", "patch", "delete", "options", "trace", "connect", "cookie:", "cookie", "host:", "user-agent:"}:
+        return True
+    if len(token) < 3 and token not in {"..", "../", "./"}:
+        return True
+    return False
+
+
 def _unescape_suricata_string(value: str) -> str:
-    return value.replace(r"\\", "\\").replace(r"\"", "\"")
+    text = value.replace(r"\\", "\\").replace(r"\"", "\"")
+    parts: list[str] = []
+    cursor = 0
+    while cursor < len(text):
+        if text[cursor] != "|":
+            parts.append(text[cursor])
+            cursor += 1
+            continue
+        end = text.find("|", cursor + 1)
+        if end < 0:
+            parts.append(text[cursor])
+            cursor += 1
+            continue
+        hex_block = text[cursor + 1 : end].strip()
+        decoded = bytearray()
+        valid_block = True
+        for piece in hex_block.split():
+            if not piece:
+                continue
+            try:
+                decoded.append(int(piece, 16))
+            except ValueError:
+                valid_block = False
+                break
+        if valid_block and decoded:
+            parts.append(decoded.decode("utf-8", errors="ignore"))
+        else:
+            parts.append(f"|{hex_block}|")
+        cursor = end + 1
+    return "".join(parts)
 
 
 def _infer_attack_type_from_runtime_rule(rule_text: str) -> str:
     lowered = (rule_text or "").lower()
+    if "log4j" in lowered or "jndi" in lowered:
+        return "jndi_injection"
     if "sql" in lowered or "sqli" in lowered:
         return "sql_injection"
+    if "cmd" in lowered or "powershell" in lowered or "command injection" in lowered or "remote code execution" in lowered or "runtime.getruntime().exec" in lowered:
+        return "cmd_injection"
     if "xss" in lowered or "<script" in lowered:
         return "xss"
-    if "traversal" in lowered or "../" in lowered:
+    if "traversal" in lowered or "../" in lowered or "file disclosure" in lowered or "local file inclusion" in lowered or "file download" in lowered:
         return "path_traversal"
     if "webshell" in lowered or "<?php" in lowered or "shell" in lowered:
         return "malware"
+    if ".env" in lowered or "phpinfo" in lowered or "probe" in lowered or "exposed" in lowered:
+        return "scanner"
     if "probe" in lowered or "scan" in lowered or "scanner" in lowered:
         return "scanner"
     return "malformed"
@@ -268,16 +333,16 @@ def _infer_attack_type_from_runtime_rule(rule_text: str) -> str:
 
 def _runtime_rule_weight(attack_type: str) -> int:
     return {
-        "sql_injection": 35,
-        "xss": 29,
-        "path_traversal": 31,
-        "cmd_injection": 33,
-        "scanner": 18,
-        "malware": 35,
-        "prototype_pollution": 27,
-        "jndi_injection": 38,
-        "malformed": 16,
-    }.get((attack_type or "").strip(), 18)
+        "sql_injection": 82,
+        "xss": 76,
+        "path_traversal": 78,
+        "cmd_injection": 86,
+        "scanner": 72,
+        "malware": 88,
+        "prototype_pollution": 76,
+        "jndi_injection": 92,
+        "malformed": 70,
+    }.get((attack_type or "").strip(), 72)
 
 
 def _runtime_rule_matches(
@@ -287,14 +352,24 @@ def _runtime_rule_matches(
     combined_lower: str,
     combined_raw: str,
     combined_raw_lower: str,
-) -> bool:
-    pattern = str(rule.get("pattern") or "")
-    if not pattern:
-        return False
-    if bool(rule.get("nocase")):
-        needle = pattern.lower()
-        return needle in combined_lower or needle in combined_raw_lower
-    return pattern in combined_text or pattern in combined_raw
+) -> str:
+    patterns = [str(item).strip() for item in (rule.get("patterns") or []) if str(item).strip()]
+    if not patterns:
+        patterns = [str(rule.get("pattern") or "").strip()]
+    if not patterns:
+        return ""
+    matched_tokens: list[str] = []
+    nocase = bool(rule.get("nocase"))
+    for pattern in patterns:
+        if nocase:
+            needle = pattern.lower()
+            if needle not in combined_lower and needle not in combined_raw_lower:
+                return ""
+        else:
+            if pattern not in combined_text and pattern not in combined_raw:
+                return ""
+        matched_tokens.append(pattern[:128])
+    return " && ".join(matched_tokens[:3])[:512]
 
 
 def scan_request_detailed(method: str, path: str, query: str, body: str | bytes | None, headers: dict, user_agent: str) -> dict:
@@ -305,54 +380,43 @@ def scan_request_detailed(method: str, path: str, query: str, body: str | bytes 
     ua = _extract_text(user_agent, 512)
     headers_str = " ".join(f"{k}:{v}" for k, v in (headers or {}).items())[:1024]
 
-    combined_text = f"{method} {path_decoded} {query_decoded} {body_str} {ua} {headers_str}"
-    combined_raw = f"{path_decoded} {query_decoded} {body_str}"
+    request_target = path_decoded or "/"
+    if query_decoded:
+        request_target = f"{request_target}?{query_decoded}"
+
+    combined_text = f"{method} {request_target} {query_decoded} {body_str} {ua} {headers_str}"
+    combined_raw = f"{request_target} {query_decoded} {body_str}"
     combined_lower = combined_text.lower()
     combined_raw_lower = combined_raw.lower()
 
     hits: list[dict] = []
     score = 0
     type_weight: dict[str, int] = {}
-    for pattern, atype, weight in SIGNATURES:
-        try:
-            if re.search(pattern, combined_text, re.IGNORECASE | re.DOTALL) or re.search(
-                pattern,
-                combined_raw,
-                re.IGNORECASE | re.DOTALL,
-            ):
-                hits.append(
-                    {
-                        "attack_type": atype,
-                        "pattern": pattern[:96],
-                        "signature_matched": pattern[:128],
-                        "weight": weight,
-                        "runtime_priority": 0,
-                    }
-                )
-                score += weight
-                type_weight[atype] = type_weight.get(atype, 0) + weight
-        except re.error:
-            pass
+    runtime_rules = refresh_runtime_rule_cache(force=False)
+    rule_source_mode = "external_runtime" if runtime_rules else "legacy_local"
 
-    for runtime_rule in refresh_runtime_rule_cache(force=False):
+    for runtime_rule in runtime_rules:
         try:
-            if not _runtime_rule_matches(
+            matched_value = _runtime_rule_matches(
                 runtime_rule,
                 combined_text=combined_text,
                 combined_lower=combined_lower,
                 combined_raw=combined_raw,
                 combined_raw_lower=combined_raw_lower,
-            ):
+            )
+            if not matched_value:
                 continue
             attack_type = str(runtime_rule.get("attack_type") or "scanner")
             weight = int(runtime_rule.get("weight") or 0)
             hits.append(
                 {
                     "attack_type": attack_type,
-                    "pattern": str(runtime_rule.get("pattern") or "")[:96],
+                    "pattern": str(runtime_rule.get("pattern_summary") or runtime_rule.get("pattern") or "")[:96],
                     "signature_matched": str(runtime_rule.get("signature_matched") or "")[:128],
                     "weight": weight,
                     "runtime_priority": int(runtime_rule.get("runtime_priority") or 1),
+                    "matched_part": "request",
+                    "matched_value": matched_value,
                     "source_classification": str(runtime_rule.get("source_classification") or "")[:32],
                     "detector_family": str(runtime_rule.get("detector_family") or "")[:32],
                     "detector_name": str(runtime_rule.get("detector_name") or "")[:64],
@@ -366,6 +430,35 @@ def scan_request_detailed(method: str, path: str, query: str, body: str | bytes 
             type_weight[attack_type] = type_weight.get(attack_type, 0) + weight
         except Exception as exc:
             logger.warning("Skipping invalid runtime IDS rule during scan: %s", exc)
+
+    if not runtime_rules:
+        for index, (pattern, atype, weight) in enumerate(SIGNATURES, start=1):
+            try:
+                if re.search(pattern, combined_text, re.IGNORECASE | re.DOTALL) or re.search(
+                    pattern,
+                    combined_raw,
+                    re.IGNORECASE | re.DOTALL,
+                ):
+                    hits.append(
+                        {
+                            "attack_type": atype,
+                            "pattern": pattern[:96],
+                            "signature_matched": pattern[:128],
+                            "weight": weight,
+                            "runtime_priority": 0,
+                            "source_classification": SOURCE_TRANSITIONAL_LOCAL,
+                            "detector_family": "web",
+                            "detector_name": "legacy_inline_signatures",
+                            "source_rule_id": f"legacy::{atype}::{index}"[:128],
+                            "source_rule_name": f"legacy_{atype}"[:128],
+                            "source_version": "legacy-inline",
+                            "source_freshness": "current",
+                        }
+                    )
+                    score += weight
+                    type_weight[atype] = type_weight.get(atype, 0) + weight
+            except re.error:
+                continue
     score = min(score, 100)
     if not hits:
         return {
@@ -377,6 +470,7 @@ def scan_request_detailed(method: str, path: str, query: str, body: str | bytes 
             "hit_count": 0,
             "hits": [],
             "detect_detail": "[]",
+            "rule_source_mode": rule_source_mode,
         }
     attack_type = max(type_weight.items(), key=lambda x: x[1])[0]
     primary_candidates = [hit for hit in hits if hit["attack_type"] == attack_type]
@@ -405,6 +499,7 @@ def scan_request_detailed(method: str, path: str, query: str, body: str | bytes 
         "source_rule_name": str(primary.get("source_rule_name") or "")[:128],
         "source_version": str(primary.get("source_version") or "")[:64],
         "source_freshness": str(primary.get("source_freshness") or "current")[:16],
+        "rule_source_mode": rule_source_mode,
     }
 
 

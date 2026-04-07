@@ -9,6 +9,7 @@ from .config import PRIVATE_LAN_CORS_REGEX, settings
 from .database import Base, SessionLocal, engine
 from .middleware.ids_middleware import IDSMiddleware
 from .schema_sync import ensure_schema
+from .services.ids_runtime_bootstrap import bootstrap_ids_runtime_source
 from .services.llm_startup import ensure_llm_ready_for_ids, llm_runtime_status
 
 Base.metadata.create_all(bind=engine)
@@ -33,6 +34,15 @@ app.add_middleware(IDSMiddleware)
 def startup() -> None:
     if settings.IDS_AI_ANALYSIS:
         ensure_llm_ready_for_ids()
+
+    runtime_status = bootstrap_ids_runtime_source()
+    print(
+        "[startup] IDS runtime bootstrap: "
+        f"status={runtime_status.get('status')}, "
+        f"source={runtime_status.get('source_key')}, "
+        f"package={runtime_status.get('package_version') or '-'}, "
+        f"rules={runtime_status.get('rule_count')}"
+    )
 
     llm_status = llm_runtime_status()
     print(

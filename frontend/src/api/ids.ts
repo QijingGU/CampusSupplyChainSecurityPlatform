@@ -26,7 +26,79 @@ export interface IDSUploadTrace {
   storage_location?: string
   indicator_count?: number
   indicators?: IDSUploadIndicator[]
+  decision_basis?: {
+    final_source?: string
+    analysis_mode?: string
+    analysis_mode_label?: string
+    mode_reason?: string
+    hold_reason_summary?: string
+    linked_event_id?: number | null
+  } | null
   audit: IDSUploadAuditTrace
+}
+
+export interface IDSRequestPacketHeader {
+  name: string
+  value: string
+}
+
+export interface IDSRequestPacket {
+  request_line: string
+  method: string
+  path: string
+  query_string: string
+  body: string
+  headers: IDSRequestPacketHeader[]
+  headers_snippet?: string
+  user_agent?: string
+  raw_request: string
+  body_truncated?: boolean
+  headers_truncated?: boolean
+}
+
+export interface IDSMatchedHit {
+  id?: string
+  attack_type?: string
+  pattern?: string
+  signature_matched: string
+  weight?: number
+  runtime_priority?: number
+  source_classification?: string
+  detector_family?: string
+  detector_name?: string
+  source_rule_id?: string
+  source_rule_name?: string
+  source_version?: string
+  source_freshness?: string
+  matched_part?: string
+  matched_value?: string
+}
+
+export interface IDSAIStatus {
+  analysis_mode?: string
+  analysis_mode_label?: string
+  mode_reason?: string
+  llm_used?: boolean
+  ai_available?: boolean
+  ai_risk_level?: string
+  ai_confidence?: number
+  ai_analyzed_at?: string | null
+}
+
+export interface IDSDecisionBasis {
+  final_source?: 'static' | 'llm' | 'hybrid' | string
+  static_source_mode?: 'external_runtime' | 'legacy_local' | string
+  static_source_label?: string
+  analysis_mode?: string
+  analysis_mode_label?: string
+  mode_reason?: string
+  static_risk_score?: number
+  block_threshold?: number
+  rule_confidence?: number
+  llm_used?: boolean
+  ai_available?: boolean
+  ai_risk_level?: string
+  ai_confidence?: number
 }
 
 export type IDSLogAuditSeverity = 'informational' | 'suspicious' | 'critical' | string
@@ -85,6 +157,7 @@ export interface IDSEventItem {
   query_snippet: string
   body_snippet: string
   user_agent: string
+  headers_snippet?: string
   blocked: number
   firewall_rule: string
   archived: number
@@ -102,6 +175,11 @@ export interface IDSEventItem {
   ai_analysis?: string
   ai_confidence?: number
   ai_analyzed_at?: string | null
+  matched_hits?: IDSMatchedHit[]
+  request_packet?: IDSRequestPacket | null
+  packet_preview?: string
+  decision_basis?: IDSDecisionBasis | null
+  ai_status?: IDSAIStatus | null
 }
 
 export interface IDSEventsResponse {
@@ -188,6 +266,63 @@ export function getIDSStats(params?: { event_origin?: string; source_classificat
 export interface IDSTrendResponse {
   dates: string[]
   counts: number[]
+}
+
+export interface IDSEventReport {
+  event_id: number
+  generated_at: string
+  overview?: {
+    time?: string
+    client_ip?: string
+    attack_type?: string
+    attack_type_label?: string
+    method?: string
+    path?: string
+    status?: string
+    event_origin?: string
+    detector_name?: string
+  }
+  score?: {
+    risk_score?: number
+    rule_confidence?: number
+    hit_count?: number
+    ai_risk_level?: string
+    ai_confidence?: number
+  }
+  evidence?: {
+    signature?: string
+    query_snippet?: string
+    body_snippet?: string
+    user_agent?: string
+  }
+  packet?: IDSRequestPacket
+  matched_hits?: IDSMatchedHit[]
+  decision_basis?: IDSDecisionBasis
+  ai_status?: IDSAIStatus
+  response?: {
+    blocked?: boolean
+    firewall_rule?: string
+    action_taken?: string
+    review_note?: string
+    response_result?: string
+    response_detail?: string
+  }
+  provenance?: {
+    source_classification?: string
+    detector_family?: string
+    detector_name?: string
+    source_rule_id?: string
+    source_rule_name?: string
+    source_version?: string
+    source_freshness?: string
+  }
+  upload_trace?: IDSUploadTrace | null
+  ai_analysis?: string
+}
+
+export interface IDSEventReportResponse {
+  report: IDSEventReport
+  markdown: string
 }
 
 // Source operations and package-history payloads for the IDS security-center
@@ -446,7 +581,7 @@ export function unblockIDSEventIp(eventId: number) {
 }
 
 export function getIDSEventReport(eventId: number, forceAI?: boolean) {
-  return request.get<{ report: any; markdown: string }>(`/ids/events/${eventId}/report`, {
+  return request.get<IDSEventReportResponse>(`/ids/events/${eventId}/report`, {
     params: { force_ai: forceAI ? 1 : 0 },
   })
 }

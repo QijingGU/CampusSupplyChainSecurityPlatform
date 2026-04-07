@@ -8,6 +8,7 @@ import { analyzeQuarantineFiles, deleteQuarantineFile, getQuarantineReport, list
 import type {
   QuarantineAnalysis,
   QuarantineAnalysisReport,
+  QuarantineDecisionBasis,
   QuarantineItem,
   QuarantineRiskLevel,
   UploadAuditResult,
@@ -143,6 +144,19 @@ function detailNarrative(row: QuarantineItem) {
   ].join('\n')
 }
 
+function detailReport(row?: QuarantineItem | null) {
+  if (!row?.saved_as) return null
+  return lastCaptureReport.value?.saved_as === row.saved_as ? lastCaptureReport.value : null
+}
+
+function hasPersistedReport(row?: QuarantineItem | null) {
+  return Boolean(row?.has_report || detailReport(row))
+}
+
+function reportActionLabel(row?: QuarantineItem | null) {
+  return hasPersistedReport(row) ? '查看报告' : '重新分析'
+}
+
 function openDetail(row: QuarantineItem) {
   detailRow.value = row
   detailOpen.value = true
@@ -256,28 +270,31 @@ async function openPersistedReport(savedAs: string) {
 
 async function focusSampleFromRoute() {
   const savedAs = typeof route.query.saved_as === 'string' ? route.query.saved_as : ''
-  if (!savedAs) return
-
-  const row = items.value.find((item) => item.saved_as === savedAs)
-  if (!row) return
-
-  pulseHighlight(savedAs)
-  tableRef.value?.setCurrentRow?.(row)
-  detailRow.value = row
-  detailOpen.value = true
-
-  if (route.query.report === '1') {
-    try {
-      await openPersistedReport(savedAs)
-    } catch {
-      ElMessage.error('指定样本报告加载失败')
+  if (savedAs) {
+    const row = items.value.find((item) => item.saved_as === savedAs)
+    if (row) {
+      pulseHighlight(savedAs)
+      tableRef.value?.setCurrentRow?.(row)
+      detailRow.value = row
+      detailOpen.value = true
+      if (route.query.report === '1') {
+        try {
+          await openPersistedReport(savedAs)
+        } catch {
+          ElMessage.error('指定样本报告加载失败')
+        }
+      }
+    } else {
+      ElMessage.warning(`未找到样本：${savedAs}`)
     }
   }
 
-  const nextQuery = { ...route.query }
-  delete nextQuery.saved_as
-  delete nextQuery.report
-  void router.replace({ path: route.path, query: nextQuery })
+  if (route.query.saved_as || route.query.report) {
+    const nextQuery = { ...route.query }
+    delete nextQuery.saved_as
+    delete nextQuery.report
+    void router.replace({ path: route.path, query: nextQuery })
+  }
 }
 
 async function fetchQuarantine() {
@@ -286,7 +303,7 @@ async function fetchQuarantine() {
     const result = await listQuarantineFiles()
     items.value = result.items ?? []
     analysis.value = result.analysis ?? null
-    lastCaptureReport.value = result.latest_report ?? lastCaptureReport.value
+    lastCaptureReport.value = result.latest_report ?? null
     await nextTick()
     if (activeTab.value === 'analysis') renderCharts()
     await focusSampleFromRoute()
@@ -345,8 +362,12 @@ async function runSyncSequence(savedAs?: string) {
 }
 
 function openLatestReport(row: QuarantineItem) {
-  if (lastCaptureReport.value?.saved_as === row.saved_as) {
+  if (detailReport(row)) {
     reportDrawerOpen.value = true
+    return
+  }
+  if (row.has_report) {
+    void openPersistedReport(row.saved_as)
     return
   }
   void runSyncSequence(row.saved_as)
@@ -378,9 +399,9 @@ watch(activeTab, async (tab) => {
 })
 
 watch(
-  () => route.query.saved_as,
+  () => [route.query.saved_as, route.query.report],
   async () => {
-    if (items.value.length) {
+    if (items.value.length && (route.query.saved_as || route.query.report)) {
       await focusSampleFromRoute()
     }
   },
@@ -414,6 +435,64 @@ function auditLlmUsed(audit?: UploadAuditResult | null) {
 
 function auditAiAvailable(audit?: UploadAuditResult | null) {
   return audit?.ai_available ?? audit?.llm_available ?? false
+}
+
+function reportDecisionBasis(report?: QuarantineAnalysisReport | null): QuarantineDecisionBasis | null {
+  return report?.decision_basis || null
+}
+
+function reportDecisionSource(report?: QuarantineAnalysisReport | null) {
+  const source = reportDecisionBasis(report)?.final_source
+  if (source === 'hybrid') return 'Static + AI'
+  if (source === 'llm') return 'AI'
+  return 'Static'
+}
+
+function reportAnalysisMode(report?: QuarantineAnalysisReport | null) {
+  return (
+    reportDecisionBasis(report)?.analysis_mode_label ||
+    reportDecisionBasis(report)?.analysis_mode ||
+    report?.audit?.analysis_mode ||
+    report?.analysis_source ||
+    '-'
+  )
+}
+
+function reportProvider(report?: QuarantineAnalysisReport | null) {
+  return reportDecisionBasis(report)?.provider || report?.audit?.provider || report?.analysis_source || '-'
+}
+
+function reportHoldReason(report?: QuarantineAnalysisReport | null) {
+  return reportDecisionBasis(report)?.hold_reason_summary || report?.audit?.summary || '-'
+}
+
+function reportStaticIndicators(report?: QuarantineAnalysisReport | null) {
+  const basisIndicators = reportDecisionBasis(report)?.matched_indicators
+  if (basisIndicators?.length) return basisIndicators
+  return report?.indicators || []
+}
+
+function reportRecommendedActions(report?: QuarantineAnalysisReport | null) {
+  const actions = [
+    ...(reportDecisionBasis(report)?.recommended_actions || []),
+    ...(report?.audit?.recommended_actions || []),
+    ...(report?.audit?.recommended_action ? [report.audit.recommended_action] : []),
+  ]
+  return Array.from(new Set(actions.filter((item) => item && item.trim())))
+}
+
+function reportReasons(report?: QuarantineAnalysisReport | null) {
+  return reportDecisionBasis(report)?.reasons || report?.audit?.reasons || report?.audit?.evidence || []
+}
+
+function reportLinkedEventId(report?: QuarantineAnalysisReport | null) {
+  return reportDecisionBasis(report)?.linked_event_id ?? report?.audit?.linked_event_id ?? null
+}
+
+function openLinkedEvent(eventId?: number | null) {
+  if (!eventId) return
+  reportDrawerOpen.value = false
+  void router.push({ path: '/security/ids', query: { event: String(eventId), report: '1' } })
 }
 
 onMounted(() => {
@@ -553,7 +632,7 @@ onBeforeUnmount(() => {
             <template #default="{ row }">
               <div class="row-actions">
                 <button type="button" class="link-btn" @click="openDetail(row)">研判简报</button>
-                <button type="button" class="link-btn" @click="openLatestReport(row)">重新分析</button>
+                <button type="button" class="link-btn" @click="openLatestReport(row)">{{ reportActionLabel(row) }}</button>
                 <button type="button" class="link-btn" @click="openFile(row)">下载样本</button>
                 <button type="button" class="link-btn danger" @click="removeRow(row)">删除</button>
               </div>
@@ -615,7 +694,33 @@ onBeforeUnmount(() => {
     <el-drawer v-model="detailOpen" title="样本研判简报" size="520px" class="sandbox-drawer">
       <template v-if="detailRow">
         <pre class="narrative">{{ detailNarrative(detailRow) }}</pre>
+        <div v-if="detailReport(detailRow)" class="brief-grid">
+          <div class="brief-item">
+            <span class="audit-label">拦截原因</span>
+            <span class="audit-value">{{ reportHoldReason(detailReport(detailRow)) }}</span>
+          </div>
+          <div class="brief-item">
+            <span class="audit-label">分析模式</span>
+            <span class="audit-value">{{ reportAnalysisMode(detailReport(detailRow)) }}</span>
+          </div>
+          <div class="brief-item">
+            <span class="audit-label">决策来源</span>
+            <span class="audit-value">{{ reportDecisionSource(detailReport(detailRow)) }}</span>
+          </div>
+          <div class="brief-item">
+            <span class="audit-label">关联 IDS 事件</span>
+            <span class="audit-value">{{ reportLinkedEventId(detailReport(detailRow)) || '-' }}</span>
+          </div>
+        </div>
         <div class="drawer-actions">
+          <button
+            v-if="hasPersistedReport(detailRow)"
+            type="button"
+            class="hud-sync hud-sync--sm"
+            @click="openLatestReport(detailRow)"
+          >
+            查看审计报告
+          </button>
           <button type="button" class="hud-sync hud-sync--sm" @click="openFile(detailRow)">下载样本</button>
           <button type="button" class="hud-ghost" @click="detailOpen = false">关闭</button>
         </div>
@@ -640,6 +745,7 @@ onBeforeUnmount(() => {
             <el-tag :type="verdictTagType(lastCaptureReport.audit?.verdict)" effect="dark">
               {{ verdictLabel(lastCaptureReport.audit?.verdict) }}
             </el-tag>
+            <el-tag type="warning" effect="plain">{{ reportDecisionSource(lastCaptureReport) }}</el-tag>
           </div>
           <p class="report-time">分析完成时间：{{ formatTime(reportTime(lastCaptureReport)) }}</p>
           <p class="report-time sub">SHA-256：{{ lastCaptureReport.sha256 }}</p>
@@ -648,36 +754,70 @@ onBeforeUnmount(() => {
         <div class="audit-summary">
           <div class="audit-grid">
             <div class="audit-item">
-              <span class="audit-label">审计引擎</span>
+              <span class="audit-label">静态规则来源</span>
               <span class="audit-value">{{ auditEngineText(lastCaptureReport.audit) }}</span>
             </div>
             <div class="audit-item">
-              <span class="audit-label">LLM 已调用</span>
-              <span class="audit-value">{{ auditLlmUsed(lastCaptureReport.audit) ? '是' : '否' }}</span>
+              <span class="audit-label">分析模式</span>
+              <span class="audit-value">{{ reportAnalysisMode(lastCaptureReport) }}</span>
             </div>
             <div class="audit-item">
-              <span class="audit-label">AI 可用</span>
-              <span class="audit-value">{{ auditAiAvailable(lastCaptureReport.audit) ? '是' : '否' }}</span>
+              <span class="audit-label">LLM 已调用 / AI 可用</span>
+              <span class="audit-value">
+                {{ auditLlmUsed(lastCaptureReport.audit) ? '是' : '否' }} / {{ auditAiAvailable(lastCaptureReport.audit) ? '是' : '否' }}
+              </span>
             </div>
             <div class="audit-item">
               <span class="audit-label">置信度</span>
               <span class="audit-value">{{ lastCaptureReport.audit.confidence }}</span>
             </div>
+            <div class="audit-item">
+              <span class="audit-label">最终裁决</span>
+              <span class="audit-value">{{ reportDecisionBasis(lastCaptureReport)?.blocked ? '已拦截并扣留沙箱' : '已放行' }}</span>
+            </div>
+            <div class="audit-item">
+              <span class="audit-label">关联 IDS 事件</span>
+              <span class="audit-value">{{ reportLinkedEventId(lastCaptureReport) || '-' }}</span>
+            </div>
           </div>
-          <p class="audit-paragraph">{{ lastCaptureReport.audit.summary }}</p>
+          <p class="audit-paragraph">{{ reportHoldReason(lastCaptureReport) }}</p>
         </div>
 
-        <div v-if="lastCaptureReport.audit.evidence?.length" class="report-list-block">
-          <h4>裁决原因</h4>
+        <div class="report-list-block report-list-block--danger">
+          <h4>为什么会被拦截</h4>
+          <p class="report-plain">{{ reportHoldReason(lastCaptureReport) }}</p>
+          <div class="report-tags report-tags--compact">
+            <el-tag size="small" type="danger">{{ lastCaptureReport.audit.risk_level || lastCaptureReport.risk_level }}</el-tag>
+            <el-tag size="small" type="warning">{{ reportProvider(lastCaptureReport) }}</el-tag>
+            <el-tag v-if="reportLinkedEventId(lastCaptureReport)" size="small" type="info" effect="plain">
+              IDS Event #{{ reportLinkedEventId(lastCaptureReport) }}
+            </el-tag>
+          </div>
+        </div>
+
+        <div v-if="reportReasons(lastCaptureReport).length" class="report-list-block">
+          <h4>拦截依据</h4>
           <ul>
-            <li v-for="reason in lastCaptureReport.audit.evidence" :key="reason">{{ reason }}</li>
+            <li v-for="reason in reportReasons(lastCaptureReport)" :key="reason">{{ reason }}</li>
           </ul>
         </div>
 
-        <div v-if="lastCaptureReport.audit.recommended_action" class="report-list-block">
+        <div v-if="reportStaticIndicators(lastCaptureReport).length" class="report-list-block">
+          <h4>静态命中指标</h4>
+          <ul>
+            <li
+              v-for="indicator in reportStaticIndicators(lastCaptureReport)"
+              :key="`${indicator.code}-${indicator.detail}`"
+            >
+              {{ indicator.code }}: {{ indicator.detail }}
+            </li>
+          </ul>
+        </div>
+
+        <div v-if="reportRecommendedActions(lastCaptureReport).length" class="report-list-block">
           <h4>建议动作</h4>
           <ul>
-            <li>{{ lastCaptureReport.audit.recommended_action }}</li>
+            <li v-for="action in reportRecommendedActions(lastCaptureReport)" :key="action">{{ action }}</li>
           </ul>
         </div>
 
@@ -691,6 +831,14 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="drawer-actions">
+          <button
+            v-if="reportLinkedEventId(lastCaptureReport)"
+            type="button"
+            class="hud-sync hud-sync--sm"
+            @click="openLinkedEvent(reportLinkedEventId(lastCaptureReport))"
+          >
+            打开关联 IDS 事件
+          </button>
           <button type="button" class="hud-ghost" @click="reportDrawerOpen = false">关闭报告</button>
         </div>
       </template>
@@ -989,9 +1137,24 @@ onBeforeUnmount(() => {
   color: rgba(226, 232, 240, 0.95);
 }
 
+.brief-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0 16px;
+}
+
+.brief-item {
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(4, 12, 24, 0.96);
+  border: 1px solid rgba(51, 65, 85, 0.42);
+}
+
 .drawer-actions {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .report-head {
@@ -1018,6 +1181,11 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 10px;
   margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.report-tags--compact {
+  margin-top: 10px;
 }
 
 .audit-summary {
@@ -1070,9 +1238,21 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(51, 65, 85, 0.42);
 }
 
+.report-list-block--danger {
+  border-color: rgba(248, 113, 113, 0.28);
+  background: linear-gradient(180deg, rgba(60, 17, 17, 0.46), rgba(9, 17, 34, 0.98));
+}
+
 .report-list-block h4,
 .report-section h4 {
   margin: 0 0 10px;
+}
+
+.report-plain {
+  margin: 0;
+  line-height: 1.7;
+  color: rgba(226, 232, 240, 0.94);
+  white-space: pre-wrap;
 }
 
 .report-list-block ul {

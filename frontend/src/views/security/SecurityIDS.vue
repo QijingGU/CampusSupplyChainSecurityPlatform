@@ -27,6 +27,7 @@ import {
 } from '@/api/ids'
 import type {
   IDSEventItem,
+  IDSEventReport,
   IDSStatsResponse,
   IDSSourceItem,
   IDSSourcePackageActivationItem,
@@ -34,6 +35,10 @@ import type {
   IDSSourceListResponse,
   IDSSourcePackageIntakeItem,
   IDSSourceRegistryPayload,
+  IDSMatchedHit,
+  IDSRequestPacket,
+  IDSDecisionBasis,
+  IDSAIStatus,
   IDSUploadTrace,
   IDSSourcePackagePreviewPayload,
   IDSSourcePackagePreviewResponse,
@@ -97,7 +102,7 @@ const aiAnalyzingId = ref<number | null>(null)
 const reportVisible = ref(false)
 const reportLoading = ref(false)
 const reportMarkdown = ref('')
-const reportData = ref<any | null>(null)
+const reportData = ref<IDSEventReport | null>(null)
 const reportOrderNo = ref('')
 const reportMeta = ref<{ reportNo: string; generatedAt: string; title: string; headerSuffix: string }>({
   reportNo: '',
@@ -108,12 +113,8 @@ const reportMeta = ref<{ reportNo: string; generatedAt: string; title: string; h
 const reportContainerRef = ref<HTMLElement | null>(null)
 const aiProcessVisible = ref(false)
 const aiProcessText = ref('AI 正在初始化安全研判引擎...')
-const aiProcessStage = ref(1)
-const aiProcessTotalStages = ref(4)
-const aiProcessProgress = ref(12)
 const aiProcessMode = ref<'analysis'>('analysis')
 const aiProcessFeed = ref<string[]>([])
-let aiProcessTimer: ReturnType<typeof setInterval> | null = null
 
 const idsHudClock = ref('')
 let idsHudClockTimer: ReturnType<typeof setInterval> | null = null
@@ -542,6 +543,50 @@ function appendUploadTraceMarkdown(base: string, trace?: IDSUploadTrace | null):
   return `${base}\n\n${suffix}`
 }
 
+function matchedHits(row?: IDSEventItem | null): IDSMatchedHit[] {
+  return Array.isArray(row?.matched_hits) ? row!.matched_hits : []
+}
+
+function requestPacket(row?: IDSEventItem | null): IDSRequestPacket | null {
+  return row?.request_packet || null
+}
+
+function decisionBasis(row?: IDSEventItem | null): IDSDecisionBasis | null {
+  return row?.decision_basis || null
+}
+
+function decisionSourceLabel(source?: string) {
+  if (source === 'hybrid') return 'Static + AI'
+  if (source === 'llm') return 'AI'
+  return 'Static'
+}
+
+function reportMatchedHits(): IDSMatchedHit[] {
+  return Array.isArray(reportData.value?.matched_hits) ? reportData.value!.matched_hits! : []
+}
+
+function reportPacket(): IDSRequestPacket | null {
+  return reportData.value?.packet || null
+}
+
+function reportDecisionBasis(): IDSDecisionBasis | null {
+  return reportData.value?.decision_basis || null
+}
+
+function reportAiStatus(): IDSAIStatus | null {
+  return reportData.value?.ai_status || null
+}
+
+function reportAnalysisModeLabel() {
+  return (
+    reportAiStatus()?.analysis_mode_label ||
+    reportAiStatus()?.analysis_mode ||
+    reportDecisionBasis()?.analysis_mode_label ||
+    reportDecisionBasis()?.analysis_mode ||
+    '-'
+  )
+}
+
 function resetSourceForm() {
   Object.assign(sourceForm, createSourceFormDefaults())
   editingSourceId.value = null
@@ -911,15 +956,15 @@ async function openEventById(eventId: number, opts?: { report?: boolean }) {
 
 async function focusEventFromRoute() {
   const raw = typeof route.query.event === 'string' ? route.query.event : ''
-  if (!raw) return
-
-  const eventId = Number(raw)
-  if (!Number.isFinite(eventId) || eventId <= 0) return
-
-  try {
-    await openEventById(eventId, { report: route.query.report === '1' })
-  } catch {
-    ElMessage.error('指定 IDS 事件加载失败')
+  if (raw) {
+    const eventId = Number(raw)
+    if (Number.isFinite(eventId) && eventId > 0) {
+      try {
+        await openEventById(eventId, { report: route.query.report === '1' })
+      } catch {
+        ElMessage.error('指定 IDS 事件加载失败')
+      }
+    }
   }
 
   const nextQuery = { ...route.query }
@@ -930,7 +975,10 @@ async function focusEventFromRoute() {
 
 async function handleAiAnalyze(row: IDSEventItem) {
   aiAnalyzingId.value = row.id
-  startAiProcess('AI 正在深度研判当前事件...')
+  startAiProcess('正在等待后端 AI 对当前拦截请求进行真实研判...', [
+    '已提交事件 AI 研判请求',
+    '后端会基于静态命中规则、攻击包和处置链生成分析结果',
+  ])
   try {
     const res: any = await analyzeIDSEventAI(row.id)
     const data = res?.data ?? res
@@ -945,6 +993,9 @@ async function handleAiAnalyze(row: IDSEventItem) {
       }
     }
     await fetchData()
+    if (currentRow.value?.id === row.id) {
+      await openEventById(row.id)
+    }
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || e?.message || 'AI 研判失败')
   } finally {
@@ -1009,46 +1060,17 @@ async function handleManualUnblock(row: IDSEventItem) {
 }
 
 function stopAiProcess() {
-  if (aiProcessTimer) clearInterval(aiProcessTimer)
-  aiProcessTimer = null
   aiProcessVisible.value = false
-  aiProcessStage.value = 1
-  aiProcessTotalStages.value = 4
-  aiProcessProgress.value = 12
   aiProcessFeed.value = []
   aiProcessMode.value = 'analysis'
 }
 
-function startAiProcess(title?: string) {
-  const stages = [
-    'AI 正在深度研判事件并生成报告...',
-    '正在回放命中规则并提取关键证据...',
-    '正在计算风险等级与置信度...',
-    '正在输出结构化安全报告...',
-  ]
-  const initialTitle = title?.trim() ? title : stages[0]
-  if (aiProcessTimer) clearInterval(aiProcessTimer)
+function startAiProcess(title?: string, feed?: string[]) {
+  const initialTitle = title?.trim() ? title : '正在等待后端返回真实 AI 研判结果...'
   aiProcessMode.value = 'analysis'
   aiProcessText.value = initialTitle
   aiProcessVisible.value = true
-  aiProcessStage.value = 1
-  aiProcessProgress.value = 12
-  aiProcessTotalStages.value = stages.length
-  aiProcessFeed.value = [initialTitle]
-  let idx = 0
-  aiProcessTimer = setInterval(() => {
-    if (idx >= stages.length - 1) {
-      aiProcessProgress.value = 100
-      if (aiProcessTimer) clearInterval(aiProcessTimer)
-      aiProcessTimer = null
-      return
-    }
-    idx += 1
-    aiProcessStage.value = idx + 1
-    aiProcessText.value = stages[idx]
-    aiProcessProgress.value = Math.min(100, 12 + Math.round(((idx + 1) / stages.length) * 88))
-    aiProcessFeed.value = [...aiProcessFeed.value.slice(-4), stages[idx]]
-  }, 900)
+  aiProcessFeed.value = feed?.length ? feed.slice(0, 4) : [initialTitle]
 }
 
 async function exportReport(format: 'md' | 'html' | 'pdf') {
@@ -1180,16 +1202,24 @@ async function openReport(
   opts?: { skipProcessOverlay?: boolean },
 ) {
   reportOrderNo.value = `${row.id}`
-  if (forceAI && !opts?.skipProcessOverlay) startAiProcess()
+  if (forceAI && !opts?.skipProcessOverlay) {
+    startAiProcess('正在等待后端生成真实事件报告...', [
+      '已提交报告生成请求',
+      '若已配置模型密钥，后端会调用 AI 生成研判正文',
+    ])
+  }
   reportLoading.value = true
   try {
     const res: any = await getIDSEventReport(row.id, forceAI)
     const data = res?.data ?? res
     reportData.value = data?.report || null
-    reportMarkdown.value = appendUploadTraceMarkdown(
-      buildProfessionalMarkdown(data, row.id),
-      data?.report?.upload_trace,
-    )
+    const backendMarkdown = String(data?.markdown || '').trim()
+    reportMarkdown.value = backendMarkdown
+      ? backendMarkdown
+      : appendUploadTraceMarkdown(
+          buildProfessionalMarkdown(data, row.id),
+          data?.report?.upload_trace,
+        )
     reportVisible.value = true
   } catch (e: any) {
     reportData.value = null
@@ -1241,7 +1271,7 @@ function reportCoverSubtitle() {
 }
 
 function reportFingerprint() {
-  const src = `${reportMeta.value.reportNo}|${reportMeta.value.generatedAt}|${reportData.value?.event_id || 0}|${reportData.value?.event_count || 0}`
+  const src = `${reportMeta.value.reportNo}|${reportMeta.value.generatedAt}|${reportData.value?.event_id || 0}|${reportData.value?.score?.hit_count || 0}`
   let h = 2166136261
   for (let i = 0; i < src.length; i += 1) {
     h ^= src.charCodeAt(i)
@@ -1275,9 +1305,9 @@ watch([eventOriginFilter, sourceClassificationFilter], () => {
   fetchData()
 })
 watch(
-  () => route.query.event,
+  () => [route.query.event, route.query.report],
   async () => {
-    if (route.query.event) {
+    if (route.query.event || route.query.report) {
       await focusEventFromRoute()
     }
   },
@@ -2092,6 +2122,71 @@ watch(
         <p><strong>命中数量：</strong>{{ currentRow.hit_count || 0 }}</p>
         <p><strong>处置状态：</strong>{{ currentRow.status || 'new' }}</p>
         <p><strong>处置备注：</strong>{{ currentRow.review_note || '-' }}</p>
+        <div v-if="decisionBasis(currentRow)" class="detail-section">
+          <div class="detail-section__title">Decision Source</div>
+          <div class="detail-tags">
+            <el-tag size="small" type="warning">
+              {{ decisionSourceLabel(decisionBasis(currentRow)?.final_source) }}
+            </el-tag>
+            <el-tag size="small" type="info">
+              {{ decisionBasis(currentRow)?.static_source_label || '-' }}
+            </el-tag>
+            <el-tag size="small" type="info">
+              {{ decisionBasis(currentRow)?.analysis_mode_label || decisionBasis(currentRow)?.analysis_mode || '-' }}
+            </el-tag>
+          </div>
+          <div class="detail-grid">
+            <div class="detail-item">
+              <span class="detail-label">Static Risk</span>
+              <span class="detail-value">{{ decisionBasis(currentRow)?.static_risk_score ?? '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">Block Threshold</span>
+              <span class="detail-value">{{ decisionBasis(currentRow)?.block_threshold ?? '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">Rule Confidence</span>
+              <span class="detail-value">{{ decisionBasis(currentRow)?.rule_confidence ?? '-' }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">LLM Used / AI Available</span>
+              <span class="detail-value">
+                {{ decisionBasis(currentRow)?.llm_used ? 'yes' : 'no' }} / {{ decisionBasis(currentRow)?.ai_available ? 'yes' : 'no' }}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div v-if="requestPacket(currentRow)" class="detail-section">
+          <div class="detail-section__title">Attack Packet</div>
+          <div class="detail-grid">
+            <div class="detail-item detail-item--full">
+              <span class="detail-label">Request Line</span>
+              <span class="detail-value detail-value--mono">{{ requestPacket(currentRow)?.request_line || '-' }}</span>
+            </div>
+            <div class="detail-item detail-item--full">
+              <span class="detail-label">Headers Snippet</span>
+              <span class="detail-value">{{ requestPacket(currentRow)?.headers_snippet || currentRow.headers_snippet || '-' }}</span>
+            </div>
+            <div class="detail-item detail-item--full">
+              <span class="detail-label">Raw Request</span>
+              <pre class="ai-text">{{ requestPacket(currentRow)?.raw_request || '-' }}</pre>
+            </div>
+          </div>
+        </div>
+        <div v-if="matchedHits(currentRow).length" class="detail-section">
+          <div class="detail-section__title">Matched Static Rules</div>
+          <div
+            v-for="hit in matchedHits(currentRow)"
+            :key="`${currentRow.id}-${hit.id || hit.source_rule_id || hit.signature_matched}`"
+            class="detail-item detail-item--full"
+          >
+            <span class="detail-label">
+              {{ hit.source_rule_id || '-' }} / {{ hit.source_rule_name || '-' }} ({{ hit.detector_name || '-' }} {{ hit.source_version || '-' }})
+            </span>
+            <span class="detail-value">{{ hit.signature_matched || hit.pattern || '-' }}</span>
+            <span class="detail-value">matched {{ hit.matched_part || 'request' }} => {{ hit.matched_value || '-' }}</span>
+          </div>
+        </div>
         <div class="detail-section">
           <div class="detail-section__title">来源与响应</div>
           <div class="detail-tags">
@@ -2169,21 +2264,25 @@ watch(
               <span class="detail-label">Audit Summary</span>
               <span class="detail-value">{{ currentRow.upload_trace.audit?.summary || '-' }}</span>
             </div>
+            <div class="detail-item detail-item--full">
+              <span class="detail-label">Audit Mode</span>
+              <span class="detail-value">
+                {{ currentRow.upload_trace.audit?.analysis_mode_label || currentRow.upload_trace.audit?.analysis_mode || '-' }}
+                / LLM {{ currentRow.upload_trace.audit?.llm_used ? 'yes' : 'no' }}
+                / AI {{ currentRow.upload_trace.audit?.ai_available ? 'yes' : 'no' }}
+              </span>
+            </div>
             <div
               v-if="currentRow.upload_trace.indicators?.length"
               class="detail-item detail-item--full"
             >
               <span class="detail-label">Indicators</span>
-              <div class="detail-tags">
-                <el-tag
-                  v-for="indicator in currentRow.upload_trace.indicators"
-                  :key="`${currentRow.id}-${indicator.code}-${indicator.detail}`"
-                  size="small"
-                  type="danger"
-                  effect="plain"
-                >
-                  {{ indicator.code }}
-                </el-tag>
+              <div
+                v-for="indicator in currentRow.upload_trace.indicators"
+                :key="`${currentRow.id}-${indicator.code}-${indicator.detail}`"
+                class="detail-value"
+              >
+                {{ indicator.code }}: {{ indicator.detail || '-' }}
               </div>
             </div>
           </div>
@@ -2272,6 +2371,39 @@ watch(
           </div>
         </div>
         <pre class="ai-text report-text">{{ reportMarkdown || '暂无报告内容' }}</pre>
+        <div v-if="reportData" class="report-grid">
+          <div class="report-card report-card-full">
+            <h4>Static Rule Evidence</h4>
+            <p>Decision Source: {{ decisionSourceLabel(reportDecisionBasis()?.final_source) }}</p>
+            <p>Static Source: {{ reportDecisionBasis()?.static_source_label || reportDecisionBasis()?.static_source_mode || '-' }}</p>
+            <p>Static Score / Threshold: {{ reportDecisionBasis()?.static_risk_score ?? '-' }} / {{ reportDecisionBasis()?.block_threshold ?? '-' }}</p>
+            <div v-if="reportMatchedHits().length" class="report-list-block">
+              <ul>
+                <li
+                  v-for="hit in reportMatchedHits()"
+                  :key="`report-hit-${hit.id || hit.source_rule_id || hit.signature_matched}`"
+                >
+                  {{
+                    `${hit.source_rule_id || '-'} ${hit.source_rule_name || '-'} | ${hit.signature_matched || hit.pattern || '-'} | ${hit.matched_part || 'request'}: ${hit.matched_value || '-'}`
+                  }}
+                </li>
+              </ul>
+            </div>
+            <p v-else>No static hit details returned by backend.</p>
+          </div>
+          <div class="report-card report-card-full">
+            <h4>AI Analysis</h4>
+            <p>Analysis Mode: {{ reportAnalysisModeLabel() }}</p>
+            <p>AI Status: LLM {{ reportAiStatus()?.llm_used ? 'on' : 'off' }} / AI {{ reportAiStatus()?.ai_available ? 'available' : 'unavailable' }}</p>
+            <p>AI Risk / Confidence: {{ reportAiStatus()?.ai_risk_level || reportData?.score?.ai_risk_level || '-' }} / {{ reportAiStatus()?.ai_confidence ?? reportData?.score?.ai_confidence ?? '-' }}</p>
+            <pre class="ai-text report-text report-text--inline">{{ reportData?.ai_analysis || 'No AI analysis body returned by backend.' }}</pre>
+          </div>
+          <div v-if="reportPacket()" class="report-card report-card-full">
+            <h4>Request Packet</h4>
+            <p>Request Line: {{ reportPacket()?.request_line || '-' }}</p>
+            <p>Headers Snippet: {{ reportPacket()?.headers_snippet || '-' }}</p>
+          </div>
+        </div>
         <div class="report-footer-sign">
           <span>平台签章：校园物资供应链安全监测平台</span>
           <span>审计用途：答辩留档 / 安全复盘</span>
@@ -2297,13 +2429,13 @@ watch(
           <div class="core-dot" />
         </div>
         <div class="ai-process-title">
-          AI 研判引擎运行中
+          等待后端 AI 返回真实结果
         </div>
-        <div class="ai-process-stage">阶段 {{ aiProcessStage }} / {{ aiProcessTotalStages }}</div>
-        <div class="ai-process-progress">
-          <div class="ai-process-progress-bar" :style="{ width: `${aiProcessProgress}%` }" />
+        <div class="ai-process-progress ai-process-progress--indeterminate">
+          <div class="ai-process-progress-bar ai-process-progress-bar--indeterminate" />
         </div>
         <div class="ai-process-desc">{{ aiProcessText }}</div>
+        <div class="ai-process-note">这里只表示后端请求仍在执行，不再模拟阶段进度。</div>
         <div class="ai-feed">
           <div v-for="(line, idx) in aiProcessFeed" :key="`${idx}-${line}`" class="ai-feed-line">
             <span class="dot" />
@@ -3520,6 +3652,11 @@ watch(
   border: 1px solid rgba(125, 211, 252, 0.22);
   overflow: hidden;
 }
+
+.ai-process-progress--indeterminate {
+  position: relative;
+}
+
 .ai-process-progress-bar {
   height: 100%;
   border-radius: inherit;
@@ -3527,11 +3664,23 @@ watch(
   box-shadow: 0 0 16px rgba(56, 189, 248, 0.5);
   transition: width 0.45s ease;
 }
+
+.ai-process-progress-bar--indeterminate {
+  width: 38%;
+  animation: ai-progress-scan 1.15s ease-in-out infinite;
+}
+
 .ai-process-desc {
   margin-top: 14px;
   color: #f1f5f9;
   font-size: 15px;
   font-weight: 600;
+}
+
+.ai-process-note {
+  margin-top: 8px;
+  color: rgba(191, 219, 254, 0.78);
+  font-size: 12px;
 }
 .ai-feed {
   margin: 16px auto 0;
@@ -3566,6 +3715,11 @@ watch(
   0% { transform: translateX(-12%) rotate(8deg); opacity: 0.2; }
   50% { transform: translateX(8%) rotate(8deg); opacity: 0.5; }
   100% { transform: translateX(24%) rotate(8deg); opacity: 0.2; }
+}
+@keyframes ai-progress-scan {
+  0% { transform: translateX(-110%); }
+  50% { transform: translateX(95%); }
+  100% { transform: translateX(-110%); }
 }
 </style>
 

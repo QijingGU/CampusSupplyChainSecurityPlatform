@@ -10,7 +10,8 @@ Show one real end-to-end chain:
 2. benign content is accepted,
 3. suspicious content is withheld into the sandbox,
 4. the sandbox can reopen and deepen the report,
-5. the resulting sample appears as a real IDS incident on the situation page.
+5. the resulting sample appears as a real IDS incident on the situation page,
+6. the bootstrapped external static rules can hard-block a malicious request with `403`.
 
 ## Demo Setup
 
@@ -108,6 +109,8 @@ Show one real end-to-end chain:
 - The page stays in the quarantined state only; it should not also show a fake
   `上传审计执行失败 / 网络错误` panel for the same upload.
 - The dialog shows verdict, risk level, and confidence.
+- The upload result explains why the file was held and whether the verdict came
+  from `static_only` or `llm_assisted` mode.
 - No public accepted-file URL is returned.
 
 ## Scene 4 - Show The Sandbox
@@ -126,7 +129,8 @@ Show one real end-to-end chain:
 
 - The sample is present in the quarantine table.
 - The row shows verdict, risk, confidence, summary, and current analysis mode.
-- The report drawer shows SHA-256, indicators, and report sections.
+- The report drawer shows `Why This File Was Held`, SHA-256, matched indicators
+  with detail, analysis mode, provider, and all recommended actions.
 
 ## Scene 5 - Review The IDS Log Audit Feed
 
@@ -251,7 +255,7 @@ Show one real end-to-end chain:
 
 - The row updates to a fresh successful sync time.
 - The latest sync detail references the manifest and rule artifact.
-- The package preview area shows `rules=4` and the shortened SHA-256.
+- The package preview area shows the refreshed ET Open-derived rule count and the shortened SHA-256.
 
 ### Scene 9 - Open History And Show Sync Audit
 
@@ -266,7 +270,7 @@ Show one real end-to-end chain:
 **Expected Result**
 
 - `Sync Audit` shows the latest result, timestamp, operator, detail, and manifest path.
-- Package intake history shows the same `2026.04.06` package plus the persisted intake detail.
+- Package intake history shows the same `2026.04.07` package plus the persisted intake detail.
 
 ## Demo Extension - Runtime Request Matching
 
@@ -279,17 +283,22 @@ Show one real end-to-end chain:
 
 **Action**
 
-- Visit `GET /runtime-probe?sample=../`.
+- Visit one of these runtime probes:
+  - `GET /.env`
+  - `GET /login?user=${jndi:ldap://demo/a}`
+  - `GET /proxy.php?url=<script>alert(1)</script>`
 - Return to `/security/ids` and open the newest event.
 
 **What To Say**
 
-“这里不是只做上传审计。运行时请求本身也会经过 IDS 匹配。现在除了内建的 SQLi/XSS/路径穿越等基础特征外，已经激活的受信规则包也会真正进入运行时缓存，所以这条事件会明确标注命中的规则源、版本和规则 ID。” 
+“这里不是只做上传审计。运行时请求本身也会经过 IDS 匹配。现在激活的是从官方 ET Open 规则包同步下来的静态规则集，所以这条事件会明确标注命中的规则源、版本和规则 ID，而且事件详情里能直接看到攻击包和静态证据链。”
 
 **Expected Result**
 
-- The newest IDS event is attributed to the activated source package instead of `inline_request_matcher / legacy-inline`.
-- The event shows `detector_name=suricata-web-prod`, the imported package version, and the matched `sid`.
+- The request is blocked with HTTP `403`.
+- The newest IDS event is attributed to the activated `suricata-web-prod` package.
+- The event shows `detector_name=suricata-web-prod`, the imported package version, the matched `sid`, an `Attack Packet` block, and the matched static-rule chain.
+- If AI is configured, the same blocked event also shows an `AI Analysis` block; if not, the report explicitly stays in static mode.
 
 ### Source Sync Talking Points
 
@@ -307,7 +316,10 @@ Show one real end-to-end chain:
   `suricata-web-prod` package is activated.
 - Keep `/security/ids` open.
 - Keep a terminal ready for:
-  - `curl "http://127.0.0.1:8166/runtime-probe?sample=../"` or `curl "http://127.0.0.1:8167/runtime-probe?sample=../"`
+  - `curl "http://127.0.0.1:8166/.env"`
+  - `curl "http://127.0.0.1:8166/login?user=%24%7Bjndi%3Aldap%3A%2F%2Fdemo%2Fa%7D"`
+  - `curl --path-as-is "http://127.0.0.1:8166/proxy.php?url=%3Cscript%3Ealert(1)%3C%2Fscript%3E"`
+  - or replace `8166` with `8167` if quick start selected the alternate backend port
 
 ### Scene 10 - Explain The Last Closed Loop
 
@@ -317,7 +329,7 @@ Show one real end-to-end chain:
 
 **What To Say**
 
-“现在补上的不是又一个状态字段，而是最后这段闭环。激活后的 `web` 规则包会进入运行时检测缓存，后面命中的事件会带真实规则源和版本，而不是继续写成老的 `inline_request_matcher`。”
+“现在补上的不是又一个状态字段，而是最后这段闭环。激活后的 `web` 规则包会进入运行时检测缓存，后面命中的事件会直接带真实规则源、版本、规则 ID 和攻击包证据链。”
 
 **Expected Result**
 
@@ -328,16 +340,16 @@ Show one real end-to-end chain:
 
 **Action**
 
-- Run `curl "http://127.0.0.1:8166/runtime-probe?sample=../"` or `curl "http://127.0.0.1:8167/runtime-probe?sample=../"`.
+- Run `curl "http://127.0.0.1:8166/runtime-probe?sample=../etc/passwd"` or `curl "http://127.0.0.1:8167/runtime-probe?sample=../etc/passwd"`.
 
 **What To Say**
 
-“这里我发一个简单的路径穿越探针。接口本身可以正常走应用流程，甚至返回 404，但 IDS 会把这次命中记成来自刚才激活的规则包。”
+“这里我发一个真实的恶意探针。现在它不会只是记录一条事件，而是会被启用的 ET Open 静态规则包真正拦截，直接返回 403。”
 
 **Expected Result**
 
-- The request returns a normal application response path (`404` is acceptable in this demo).
-- A new IDS event is recorded.
+- The request returns HTTP `403`.
+- A new IDS event is recorded with the matched-rule chain and block score.
 
 ### Scene 12 - Show Runtime Provenance
 
@@ -347,16 +359,16 @@ Show one real end-to-end chain:
 
 **What To Say**
 
-“关键点不是有没有再弹一个提示，而是事件来源变了。现在这里能看到 `suricata-web-prod`、包版本 `2026.04.06`、以及命中的规则 id，而不是统一写成旧的本地内联匹配器。”
+“关键点不是有没有再弹一个提示，而是事件来源变了。现在这里能看到 `suricata-web-prod`、包版本 `2026.04.07`、命中的规则 id、攻击包预览，以及是否走到 AI 研判。”
 
 **Expected Result**
 
 - The latest IDS event shows `detector_name=suricata-web-prod`.
-- The event shows `source_version=2026.04.06`.
-- The event shows `source_rule_id=9001003`.
+- The event shows `source_version=2026.04.07`.
+- The event shows the matched `source_rule_id`, the `Attack Packet` block, the block score vs threshold, and the optional AI analysis mode.
 
 ### Runtime Activation Talking Points
 
 - This is a lightweight runtime bridge for activated `web` artifacts, not a full Suricata execution engine.
-- If no eligible activated package exists, IDS safely falls back to the legacy inline matcher.
+- 在当前本地演示里，启动阶段会自动引导并激活 `suricata-web-prod`，所以请求侧展示的就是外部规则包命中链，而不是空规则状态。
 - `scheduled` sync automation and non-`web` runtime execution remain later work.

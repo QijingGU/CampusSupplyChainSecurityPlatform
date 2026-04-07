@@ -124,6 +124,34 @@ export interface QuarantineReportIndicator {
   detail: string
 }
 
+export interface QuarantineDecisionIndicator {
+  code: string
+  detail: string
+}
+
+export interface QuarantineDecisionBasis {
+  final_source?: 'static' | 'llm' | 'hybrid' | string
+  analysis_mode?: UploadAuditMode | string
+  analysis_mode_label?: string
+  mode_reason?: string
+  verdict?: UploadAuditVerdict | string
+  blocked?: boolean
+  risk_level?: UploadAuditRiskLevel
+  confidence?: number
+  hold_reason_summary?: string
+  indicator_count?: number
+  matched_indicators?: QuarantineDecisionIndicator[]
+  llm_used?: boolean
+  ai_available?: boolean
+  provider?: string
+  recommended_actions?: string[]
+  reasons?: string[]
+  static_risk_level?: UploadAuditRiskLevel
+  heuristic_risk_level?: UploadAuditRiskLevel
+  heuristic_verdict?: UploadAuditVerdict | string
+  linked_event_id?: number | null
+}
+
 export interface QuarantineAnalysisReport {
   saved_as: string
   file_name: string
@@ -139,6 +167,7 @@ export interface QuarantineAnalysisReport {
   indicators: QuarantineReportIndicator[]
   storage_location?: string
   analysis_source?: string
+  decision_basis?: QuarantineDecisionBasis
   audit: UploadAuditResult
   sections: QuarantineReportSection[]
 }

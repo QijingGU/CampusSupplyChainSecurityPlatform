@@ -21,6 +21,24 @@ Spec references:
 
 ## 2026-04-07
 
+- Bootstrapped the bundled `suricata-web-prod` manifest/rules fixture into the
+  runtime IDS source registry at startup, so fresh offline environments now
+  come up with one activated external static rule package instead of waiting
+  for manual source setup.
+- Tightened request-side runtime blocking:
+  - activated external static rules are now the primary interception path, with
+    the old inline signatures only retained as a fallback when no runtime
+    package is active,
+  - malicious SQLi, XSS, and path-traversal probes now cross the block
+    threshold and return real HTTP `403` responses,
+  - blocked events now persist a structured attack packet view, matched static
+    rules, decision basis, and AI/static analysis mode for the security-center
+    detail/report surfaces.
+- Deepened sandbox explainability:
+  - quarantine reports now persist `decision_basis`, `hold_reason_summary`,
+    matched indicators, provider/mode fields, and full recommended actions,
+  - sandbox and IDS evidence chains can now explain why a file was held and
+    whether that decision came from static rules or LLM-assisted analysis.
 - Fixed the public upload result-state bug in
   `frontend/src/views/upload/PublicUpload.vue`:
   - quarantined uploads now stay in the quarantined state after the audit
@@ -484,6 +502,16 @@ Spec references:
 ## 2026-04-07
 
 - Note: This historical strict-gate entry is superseded by `2026-04-06 (Mode Clarification)` above, which defines the current behavior (`static_only` without key, `llm_assisted` with key).
+
+- Replaced the security-center request-side static bundle with a curated ET Open Suricata package:
+  - added `backend/app/data/ids_source_sync/sync_suricata_web_prod.py` to pull the official ET Open archive and regenerate the local `suricata-web-prod` artifact,
+  - refreshed the runtime manifest so `/security/ids` can show the package as an externally sourced static ruleset instead of a hand-written demo list.
+- Hardened runtime rule execution so the bundled rules now behave like grouped upstream signatures instead of loose token matches:
+  - `backend/app/services/ids_engine.py` now decodes Suricata hex content, keeps one runtime rule per upstream rule, and requires the selected content chain to match together before the request is blocked,
+  - validated examples now include `/.env`, cookie-based `UNION SELECT`, `${jndi:ldap://...}`, `/proxy.php?url=<script>...`, and `fetchLogFiles` path-traversal probes, all of which cross the real request-side `403` gate and persist rule provenance.
+- Finished the last visible fake-analysis cleanup on the active IDS and sandbox pages:
+  - `/security/ids` now surfaces backend-supplied `Matched Static Rules`, `Attack Packet`, `Decision Source`, and backend markdown reports, while the AI processing dialog was changed from staged fake progress to a truthful “waiting for backend” state,
+  - `/security/sandbox` now reuses the persisted report when available, shows why the file was held, which static indicators fired, the AI/static mode, the linked IDS event id, and the recommended actions instead of a local-only narrative.
 
 - Hardened the AI upload gate with strict validation:
   - `backend/app/services/upload_ai_audit.py` no longer returns fallback heuristics; missing LLM configuration or invalid responses now surface as outright rejections so every verdict truly comes from the configured AI provider,

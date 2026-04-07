@@ -20,6 +20,9 @@ Use the bundled local sync fixture:
 - Manifest: `backend/app/data/ids_source_sync/suricata-web-prod.manifest.json`
 - Artifact: `backend/app/data/ids_source_sync/suricata-web-prod.rules`
 
+On a fresh local database, startup should now bootstrap this fixture into the
+IDS source registry automatically.
+
 ## 3. Create Or Edit The Source
 
 1. Sign in as `system_admin / 123456`.
@@ -36,10 +39,17 @@ Use the bundled local sync fixture:
 1. Click `执行同步`.
 2. Expect the source row to update with:
    - latest sync status `success`,
-   - package version `2026.04.06`,
+   - package version `2026.04.07`,
    - resolved manifest path,
-   - `rules=4`,
+   - `rules=15`,
    - a visible hash preview.
+
+Before manually syncing, you should also be able to verify that startup already
+exposed:
+
+- source key `suricata-web-prod`
+- a visible active package version
+- a visible rule count and hash-backed package preview
 
 ## 5. Review History
 

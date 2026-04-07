@@ -145,6 +145,7 @@ def _with_audit_compat(audit: dict[str, Any] | None) -> dict[str, Any]:
     payload.setdefault("recommended_actions", [])
     payload.setdefault("recommended_action", (payload.get("recommended_actions") or [""])[0])
     payload.setdefault("analysis_mode_label", "AI audit" if payload.get("analysis_mode") == "llm_assisted" else "Static audit")
+    payload.setdefault("reasons", payload.get("evidence") or [])
     if "llm_available" not in payload and "ai_available" in payload:
         payload["llm_available"] = bool(payload.get("ai_available"))
     return payload
@@ -397,10 +398,80 @@ def _report_risk_level(audit: dict[str, Any], profile: dict[str, Any]) -> str:
     return risk if risk in {"low", "medium", "high"} else "low"
 
 
+def _decision_source(audit: dict[str, Any]) -> str:
+    return "llm" if audit.get("llm_used") else "static"
+
+
+def _hold_reason_summary(file_name: str, audit: dict[str, Any], profile: dict[str, Any]) -> str:
+    verdict = str(audit.get("verdict") or AUDIT_VERDICT_REVIEW)
+    indicators = profile.get("indicators") or []
+    indicator_text = ", ".join(str(item.get("code") or "") for item in indicators[:4] if isinstance(item, dict) and item.get("code"))
+    summary = str(audit.get("summary") or "").strip()
+    if verdict == AUDIT_VERDICT_PASS:
+        return summary or f"{file_name} passed the static upload checks and was released."
+    if indicator_text:
+        return summary or f"{file_name} was held because the static scanner matched {indicator_text}."
+    if verdict == AUDIT_VERDICT_QUARANTINE:
+        return summary or f"{file_name} was held because the static scanner marked it as high risk."
+    return summary or f"{file_name} was held for manual review after the upload scanner found suspicious traits."
+
+
+def _build_decision_basis(file_name: str, profile: dict[str, Any], audit: dict[str, Any], *, linked_event_id: int | None = None) -> dict[str, Any]:
+    verdict = str(audit.get("verdict") or AUDIT_VERDICT_REVIEW)
+    risk_level = _report_risk_level(audit, profile)
+    blocked = verdict != AUDIT_VERDICT_PASS
+    hold_reason = _hold_reason_summary(file_name, audit, profile)
+    indicators = []
+    for item in (profile.get("indicators") or [])[:12]:
+        if isinstance(item, dict):
+            indicators.append(
+                {
+                    "code": str(item.get("code") or "")[:64],
+                    "detail": str(item.get("detail") or "")[:255],
+                }
+            )
+    return {
+        "final_source": _decision_source(audit),
+        "analysis_mode": str(audit.get("analysis_mode") or "static_only")[:32],
+        "analysis_mode_label": str(audit.get("analysis_mode_label") or "Static audit")[:64],
+        "mode_reason": str(audit.get("mode_reason") or "")[:64],
+        "verdict": verdict[:32],
+        "blocked": blocked,
+        "risk_level": risk_level,
+        "confidence": max(0, min(100, int(audit.get("confidence") or 0))),
+        "hold_reason_summary": hold_reason[:1000],
+        "indicator_count": len(indicators),
+        "matched_indicators": indicators,
+        "llm_used": bool(audit.get("llm_used")),
+        "ai_available": bool(audit.get("ai_available") or audit.get("llm_available")),
+        "provider": str(audit.get("provider") or audit.get("engine") or "static-rules")[:128],
+        "recommended_actions": [
+            str(action).strip()[:255]
+            for action in (audit.get("recommended_actions") or [])
+            if str(action).strip()
+        ][:5],
+        "reasons": [
+            str(reason).strip()[:255]
+            for reason in (audit.get("reasons") or audit.get("evidence") or [])
+            if str(reason).strip()
+        ][:6],
+        "static_risk_level": str(audit.get("static_risk_level") or profile.get("heuristic_risk_level") or risk_level)[:32],
+        "heuristic_risk_level": str(audit.get("heuristic_risk_level") or profile.get("heuristic_risk_level") or risk_level)[:32],
+        "heuristic_verdict": str(audit.get("heuristic_verdict") or verdict)[:32],
+        "linked_event_id": int(linked_event_id or audit.get("linked_event_id") or 0) or None,
+    }
+
+
 def _build_report_payload(saved_as: str, file_name: str, size: int, sha256_value: str, storage_location: str, profile: dict[str, Any], audit: dict[str, Any], *, existing: dict[str, Any] | None = None, sections: list[dict[str, str]] | None = None) -> dict[str, Any]:
     existing_payload = existing or {}
     updated_at = _now_iso()
     audit_payload = _with_audit_compat(audit)
+    linked_event_id = (
+        existing_payload.get("decision_basis", {}).get("linked_event_id")
+        if isinstance(existing_payload.get("decision_basis"), dict)
+        else None
+    )
+    decision_basis = _build_decision_basis(file_name, profile, audit_payload, linked_event_id=linked_event_id)
     return {
         "saved_as": saved_as,
         "file_name": _normalize_filename(file_name),
@@ -417,20 +488,72 @@ def _build_report_payload(saved_as: str, file_name: str, size: int, sha256_value
         "storage_location": storage_location,
         "analysis_source": "sandbox_analysis" if sections is not None else "upload_gate",
         "audit": audit_payload,
+        "decision_basis": decision_basis,
         "sections": sections if sections is not None else (existing_payload.get("sections") or []),
     }
 
 def _build_report_sections(saved_as: str, file_name: str, size: int, sha256_value: str, storage_location: str, profile: dict[str, Any], audit: dict[str, Any]) -> list[dict[str, str]]:
     indicators = profile.get("indicators") or []
+    basis = _build_decision_basis(file_name, profile, audit)
     indicator_text = "\n".join(f"- {item['code']}: {item['detail']}" for item in indicators) if indicators else "- No dangerous indicators were detected."
-    actions = audit.get("recommended_actions") or []
+    actions = basis.get("recommended_actions") or []
     action_text = "\n".join(f"- {item}" for item in actions) if actions else "- No follow-up action was generated."
     preview_text = str(profile.get("content_preview") or "No preview captured.")
     return [
-        {"title": "Sample Overview", "body": f"Saved as: {saved_as}\nOriginal name: {file_name}\nSize: {size} bytes\nExtension: {profile.get('extension') or '(none)'}\nSHA-256: {sha256_value}\nStorage: {storage_location}"},
-        {"title": "Format And Structure", "body": f"Signature: {profile.get('signature')}\nTrusted format: {'yes' if profile.get('trusted_format') else 'no'}\nTrusted label: {profile.get('trusted_format_label') or '-'}\nPreview truncated: {'yes' if profile.get('preview_truncated') else 'no'}\nPreview: {preview_text}"},
-        {"title": "Risk Signals", "body": indicator_text},
-        {"title": "Disposition", "body": f"Verdict: {audit.get('verdict')}\nRisk level: {audit.get('risk_level')}\nConfidence: {int(audit.get('confidence') or 0)}\nSummary: {audit.get('summary') or '-'}\nActions:\n{action_text}"},
+        {
+            "title": "Why This File Was Held",
+            "body": (
+                f"Verdict: {basis.get('verdict')}\n"
+                f"Blocked: {'yes' if basis.get('blocked') else 'no'}\n"
+                f"Analysis source: {basis.get('final_source')}\n"
+                f"Analysis mode: {basis.get('analysis_mode_label') or basis.get('analysis_mode')}\n"
+                f"Mode reason: {basis.get('mode_reason') or '-'}\n"
+                f"Confidence: {basis.get('confidence')}\n"
+                f"Summary: {basis.get('hold_reason_summary') or '-'}"
+            ),
+        },
+        {
+            "title": "Sample Overview",
+            "body": (
+                f"Saved as: {saved_as}\n"
+                f"Original name: {file_name}\n"
+                f"Size: {size} bytes\n"
+                f"Extension: {profile.get('extension') or '(none)'}\n"
+                f"SHA-256: {sha256_value}\n"
+                f"Storage: {storage_location}"
+            ),
+        },
+        {
+            "title": "Static Signals",
+            "body": (
+                f"Signature: {profile.get('signature')}\n"
+                f"Trusted format: {'yes' if profile.get('trusted_format') else 'no'}\n"
+                f"Trusted label: {profile.get('trusted_format_label') or '-'}\n"
+                f"Heuristic risk: {basis.get('heuristic_risk_level') or '-'}\n"
+                f"Heuristic verdict: {basis.get('heuristic_verdict') or '-'}\n"
+                f"Indicators:\n{indicator_text}"
+            ),
+        },
+        {
+            "title": "AI And Review Analysis",
+            "body": (
+                f"Provider: {basis.get('provider') or '-'}\n"
+                f"LLM used: {'yes' if basis.get('llm_used') else 'no'}\n"
+                f"AI available: {'yes' if basis.get('ai_available') else 'no'}\n"
+                f"Risk level: {audit.get('risk_level') or '-'}\n"
+                f"Summary: {audit.get('summary') or '-'}\n"
+                f"Reasons:\n"
+                + ("\n".join(f"- {item}" for item in (basis.get('reasons') or [])) if basis.get("reasons") else "- No additional reasons were returned.")
+            ),
+        },
+        {
+            "title": "Preview And Disposition",
+            "body": (
+                f"Preview truncated: {'yes' if profile.get('preview_truncated') else 'no'}\n"
+                f"Preview: {preview_text}\n"
+                f"Actions:\n{action_text}"
+            ),
+        },
     ]
 
 
@@ -476,6 +599,7 @@ def _run_upload_audit(file_name: str, content: bytes) -> tuple[dict[str, Any], d
 
 def _sync_ids_event_from_report(db: Session, request: Request, report: dict[str, Any]) -> int:
     audit = report.get("audit") if isinstance(report.get("audit"), dict) else {}
+    decision_basis = report.get("decision_basis") if isinstance(report.get("decision_basis"), dict) else {}
     linked_event_id = int(audit.get("linked_event_id") or 0)
     event = db.query(IDSEvent).filter(IDSEvent.id == linked_event_id).first() if linked_event_id else None
     created_at = _now()
@@ -497,10 +621,10 @@ def _sync_ids_event_from_report(db: Session, request: Request, report: dict[str,
     event.firewall_rule = "upload_audit_gate"
     event.archived = 0
     event.status = "investigating"
-    event.review_note = "Created by upload audit quarantine flow."
+    event.review_note = str(decision_basis.get("hold_reason_summary") or "Created by upload audit quarantine flow.")[:2000]
     event.action_taken = f"upload::{audit.get('verdict') or AUDIT_VERDICT_REVIEW}::{saved_as}"[:128]
     event.response_result = str(audit.get("verdict") or "")
-    event.response_detail = str(audit.get("summary") or "")[:8000]
+    event.response_detail = str(decision_basis.get("hold_reason_summary") or audit.get("summary") or "")[:8000]
     event.risk_score = _ids_score(report)
     event.confidence = max(0, min(100, int(audit.get("confidence") or 0)))
     event.hit_count = max(1, int(report.get("indicator_count") or 0))
@@ -645,7 +769,11 @@ def analyze_quarantine(request: Request, payload: QuarantineAnalyzeRequest | Non
     existing_audit = existing.get("audit") if isinstance(existing, dict) and isinstance(existing.get("audit"), dict) else {}
     if existing_audit.get("linked_event_id"):
         report["audit"]["linked_event_id"] = existing_audit["linked_event_id"]
+        if isinstance(report.get("decision_basis"), dict):
+            report["decision_basis"]["linked_event_id"] = int(existing_audit["linked_event_id"])
     event_id = _sync_ids_event_from_report(db, request, report)
+    if isinstance(report.get("decision_basis"), dict):
+        report["decision_basis"]["linked_event_id"] = event_id
     _write_report(path.name, report)
     _write_ids_log(db, current_user=current_user, action="ids_sandbox_analyze", target_type="sandbox_file", target_id=path.name, detail=f"Analyzed sandbox sample {path.name}; verdict={audit.get('verdict')}; risk={report.get('risk_level')}; event_id={event_id}")
     db.commit()

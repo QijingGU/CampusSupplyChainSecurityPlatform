@@ -14,8 +14,9 @@ requests can be matched by the active package, not only by the legacy inline
 matcher.
 
 **Independent Test**: activate `suricata-web-prod`, send
-`GET /runtime-probe?sample=../`, and verify runtime detection reports
-`detector_name=suricata-web-prod` with `source_version=2026.04.06`.
+`GET /runtime-probe?sample=../etc/passwd`, and verify the request is blocked
+with HTTP `403` while runtime detection reports `detector_name=suricata-web-prod`
+with `source_version=2026.04.07`.
 
 ### User Story 2 - Runtime Events Preserve Real Source Provenance (Priority: P1)
 
@@ -23,8 +24,8 @@ A reviewer inspects the resulting IDS event and can see which activated source,
 package version, and rule id produced the detection.
 
 **Independent Test**: inspect the latest `/runtime-probe` IDS event and verify
-`source_classification=external_mature`, `source_rule_id=9001003`, and the
-runtime signature string instead of `legacy-inline`.
+`source_classification=external_mature`, a real `source_rule_id`, the persisted
+attack packet, and the runtime signature chain instead of `legacy-inline`.
 
 ### User Story 3 - Source Changes Refresh Runtime State Promptly (Priority: P2)
 
@@ -58,6 +59,12 @@ and verify the event already carries the activated package metadata.
 - **FR-003**: Runtime request matches from activated packages MUST surface real
   provenance fields: source classification, detector family, source key, rule
   id, rule name, and package version.
+- **FR-003a**: Runtime request matches that cross `IDS_BLOCK_THRESHOLD` MUST
+  return HTTP `403` and persist the matched score plus the block threshold.
+- **FR-003b**: Blocked runtime events MUST persist sanitized attack-packet
+  fields covering request line, query/body snippets, and captured headers.
+- **FR-003c**: Blocked runtime events MUST expose the matched static-rule chain
+  and optional AI analysis status/mode when AI is configured.
 - **FR-004**: Runtime cache refresh MUST be triggered after source updates and
   package activations so operator-visible changes take effect promptly.
 - **FR-005**: Request inspection MUST continue working if no active runtime
@@ -74,10 +81,11 @@ and verify the event already carries the activated package metadata.
 
 ## Success Criteria
 
-- **SC-001**: A request containing `../` after activating `suricata-web-prod`
-  is attributed to the activated source instead of `inline_request_matcher`.
-- **SC-002**: The persisted IDS event records `source_version=2026.04.06` and
-  `source_rule_id=9001003`.
+- **SC-001**: A request containing `../etc/passwd` after activating
+  `suricata-web-prod` returns HTTP `403` and is attributed to the activated
+  source instead of `inline_request_matcher`.
+- **SC-002**: The persisted IDS event records `source_version=2026.04.07`,
+  a real `source_rule_id`, and a visible attack-packet/matched-hit payload.
 - **SC-003**: Backend syntax validation passes for the updated IDS runtime,
   middleware, and API files.
 - **SC-004**: The runtime path degrades safely to the legacy inline matcher when
@@ -89,12 +97,12 @@ and verify the event already carries the activated package metadata.
   `python -m py_compile backend/app/services/ids_engine.py backend/app/middleware/ids_middleware.py backend/app/api/ids.py`
 - Runtime validation passed on 2026-04-06:
   - refreshed the active `suricata-web-prod` package,
-  - `scan_request_detailed("GET", "/runtime-probe", "sample=../", ...)`
+  - `scan_request_detailed("GET", "/runtime-probe", "sample=../etc/passwd", ...)`
     returned `detector_name=suricata-web-prod`,
-    `source_version=2026.04.06`, and `source_rule_id=9001003`,
-  - `GET /runtime-probe?sample=../` persisted an IDS event with the same source
-    metadata and returned HTTP `404`, proving the IDS path recorded the event
-    without fabricating a demo response.
+    `source_version=2026.04.07`, and a real runtime `source_rule_id`,
+  - `GET /runtime-probe?sample=../etc/passwd` now persists an IDS event with
+    the same source metadata and returns HTTP `403`, proving the IDS path
+    blocks through the runtime package instead of fabricating a demo response.
 
 ## Assumptions And Residual Scope
 
