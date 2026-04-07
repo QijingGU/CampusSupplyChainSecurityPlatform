@@ -87,7 +87,7 @@ Spec references:
     silently even though new blocked upload incidents were still being created,
   - `frontend/src/stores/user.ts` now persists the authenticated user profile
     in `localStorage` and restores it when the store initializes,
-  - `frontend/src/main.ts` now rehydrates the current user from
+  - `frontend/src/App.vue` now rehydrates the current user from
     `GET /api/user/info` when a token exists but no in-memory profile is
     present, so old sessions and refreshes both recover without requiring a
     manual relogin,
@@ -96,6 +96,14 @@ Spec references:
     malicious PHP sample, the frontend kept `user-info` in local storage,
     advanced the IDS popup watermark to event `#147`, and rendered a visible
     `高危 IDS 风险预警` dialog for the new quarantined upload event.
+
+
+  - follow-up validation on the same day also simulated an older token-only
+    browser session by removing `user-info` before reload while keeping the
+    JWT; `frontend/src/App.vue` restored the operator profile from
+    `GET /api/user/info`, `frontend/src/components/layout/AppLayout.vue`
+    recovered the `system_admin` gate, and the next malicious upload raised a
+    visible admin popup for event `#153` without requiring a manual relogin.
 
 
 ## 2026-04-07
