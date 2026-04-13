@@ -1,5 +1,6 @@
 @use './variables.scss';
 @use './security-hud-shared.scss';
+@use './theme-transition.scss';
 
 // 全局重置
 *,
@@ -24,18 +25,67 @@ body {
   overflow-x: hidden;
 }
 
-// 页面过渡
-.page-enter-active,
+html.dark body {
+  background: #0b0f14;
+  color: #e2e8f0;
+}
+
+html.dark {
+  --bg-base: #0b0f14;
+  --bg-elevated: #141a22;
+  --bg-card: #141a22;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.12);
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --primary-muted: rgba(99, 102, 241, 0.15);
+}
+
+// 页面过渡（与 art-design-pro 类似的 slide-left：进入自右微移、离开反向，GPU 友好）
+$page-t-duration: 0.25s;
+$page-t-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+$page-t-distance: 14px;
+
+.page-enter-active {
+  transition:
+    opacity $page-t-duration $page-t-ease,
+    transform $page-t-duration $page-t-ease;
+  will-change: opacity, transform;
+}
 .page-leave-active {
-  transition: opacity var(--transition-base), transform var(--transition-base);
+  transition:
+    opacity calc($page-t-duration * 0.72) $page-t-ease,
+    transform calc($page-t-duration * 0.72) $page-t-ease;
+  will-change: opacity, transform;
 }
 .page-enter-from {
   opacity: 0;
-  transform: translateY(8px);
+  transform: translate3d($page-t-distance, 0, 0);
+}
+.page-enter-to {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+.page-leave-from {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
 }
 .page-leave-to {
   opacity: 0;
-  transform: translateY(-6px);
+  transform: translate3d(-$page-t-distance, 0, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter-active,
+  .page-leave-active {
+    transition-duration: 0.01ms !important;
+  }
+  .page-enter-from,
+  .page-leave-to {
+    transform: none !important;
+  }
 }
 
 // 卡片
@@ -69,7 +119,43 @@ body {
   --el-table-tr-bg-color: var(--bg-card) !important;
   --el-table-header-bg-color: #fafafa !important;
   --el-table-border-color: var(--border-subtle) !important;
-  --el-table-row-hover-bg-color: var(--primary-muted) !important;
+  /* 行悬停：浅灰底，避免与主色紫块糊成一片 */
+  --el-table-row-hover-bg-color: rgba(15, 23, 42, 0.04) !important;
+}
+
+html.dark .el-table {
+  --el-table-row-hover-bg-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+/* 表格内 link 按钮：禁止沿用主按钮渐变底，避免「紫底 + 图标」对比不足 */
+.el-table .el-button.is-link.el-button--primary {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  transform: none !important;
+  color: var(--el-color-primary, #4f46e5) !important;
+  padding: 4px 6px !important;
+  min-height: auto !important;
+  &:hover {
+    background: rgba(79, 70, 229, 0.1) !important;
+    color: var(--el-color-primary) !important;
+    transform: none !important;
+  }
+  &:focus-visible {
+    outline: 2px solid rgba(79, 70, 229, 0.35);
+    outline-offset: 1px;
+  }
+}
+
+.el-table .el-button.is-link.el-button--danger {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  transform: none !important;
+  &:hover {
+    background: rgba(245, 108, 108, 0.12) !important;
+    transform: none !important;
+  }
 }
 
 .el-input__wrapper {

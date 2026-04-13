@@ -5,6 +5,8 @@ export interface UserItem {
   username: string
   real_name: string
   role: string
+  department?: string
+  phone?: string
 }
 
 export interface UserCreateParams {

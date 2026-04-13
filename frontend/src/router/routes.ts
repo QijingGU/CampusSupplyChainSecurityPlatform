@@ -18,6 +18,18 @@ export const routes: RouteRecordRaw[] = [
     meta: { public: true, title: '登录' },
   },
   {
+    path: '/forgot-password',
+    name: 'ForgotPassword',
+    component: () => import('@/views/auth/ForgotPassword.vue'),
+    meta: { public: true, title: '忘记密码' },
+  },
+  {
+    path: '/register',
+    name: 'Register',
+    component: () => import('@/views/auth/Register.vue'),
+    meta: { public: true, title: '注册' },
+  },
+  {
     path: '/upload',
     name: 'PublicUpload',
     component: () => import('@/views/upload/PublicUpload.vue'),
@@ -32,7 +44,40 @@ export const routes: RouteRecordRaw[] = [
         path: 'dashboard',
         name: 'Dashboard',
         component: () => import('@/views/dashboard/Dashboard.vue'),
-        meta: { title: '工作台', icon: 'Odometer', roles: ['system_admin', 'logistics_admin', 'warehouse_procurement', 'campus_supplier', 'counselor_teacher'] },
+        meta: {
+          title: '工作台',
+          icon: 'Odometer',
+          menuGroup: 'dashboard',
+          roles: ['system_admin', 'logistics_admin', 'warehouse_procurement', 'campus_supplier'],
+        },
+      },
+      {
+        path: 'dashboard/analysis',
+        name: 'DashboardAnalysis',
+        component: () => import('@/views/dashboard/analysis/DashboardAnalysis.vue'),
+        meta: {
+          title: '全景大屏',
+          icon: 'DataLine',
+          menuGroup: 'dashboard',
+          roles: [
+            'system_admin',
+            'logistics_admin',
+            'warehouse_procurement',
+            'campus_supplier',
+            'counselor_teacher',
+          ],
+        },
+      },
+      {
+        path: 'profile',
+        name: 'UserProfile',
+        component: () => import('@/views/profile/UserCenter.vue'),
+        meta: {
+          title: '个人中心',
+          icon: 'User',
+          hideInMenu: true,
+          roles: ['system_admin', 'logistics_admin', 'warehouse_procurement', 'campus_supplier', 'counselor_teacher'],
+        },
       },
       // 后勤管理员 + 仓储采购员
       {
@@ -40,12 +85,6 @@ export const routes: RouteRecordRaw[] = [
         name: 'GoodsList',
         component: () => import('@/views/goods/GoodsList.vue'),
         meta: { title: '物资管理', icon: 'Box', roles: ['logistics_admin', 'warehouse_procurement'] },
-      },
-      {
-        path: 'supplier',
-        name: 'SupplierList',
-        component: () => import('@/views/supplier/SupplierList.vue'),
-        meta: { title: '供应商管理', icon: 'OfficeBuilding', roles: ['system_admin'] },
       },
       {
         path: 'purchase',
@@ -105,21 +144,10 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/screen/LogisticsScreen.vue'),
         meta: { title: '后勤大屏', icon: 'Monitor', roles: ['logistics_admin'] },
       },
-      // 供应链全景大屏（教师端不开放，见路由守卫 roles）
       {
         path: 'screen/overview',
-        name: 'SupplyChainOverviewScreen',
-        component: () => import('@/views/screen/SupplyChainOverviewScreen.vue'),
-        meta: {
-          title: '供应链全景大屏',
-          icon: 'Monitor',
-          roles: [
-            'system_admin',
-            'logistics_admin',
-            'warehouse_procurement',
-            'campus_supplier',
-          ],
-        },
+        redirect: (to) => ({ path: '/dashboard/analysis', query: { ...to.query, view: 'panorama' } }),
+        meta: { hideInMenu: true },
       },
       // 溯源 - 教师、后勤、仓储
       {
@@ -142,18 +170,33 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/ai/AIChat.vue'),
         meta: { title: 'AI 助手', icon: 'ChatDotRound', roles: ['system_admin', 'logistics_admin', 'warehouse_procurement', 'campus_supplier', 'counselor_teacher'] },
       },
-      // 辅导员教师专属 - 我的申请
       {
         path: 'my-applications',
-        name: 'MyApplications',
-        component: () => import('@/views/teacher/MyApplications.vue'),
-        meta: { title: '我的申请', icon: 'Document', roles: ['counselor_teacher'] },
+        redirect: (to) => ({ path: '/teacher/personal', query: { ...to.query, tab: 'orders' } }),
+        meta: { hideInMenu: true, roles: ['counselor_teacher'] },
       },
       {
         path: 'teacher/service-evaluation',
-        name: 'TeacherServiceEvaluation',
-        component: () => import('@/views/teacher/ServiceEvaluationPlaceholder.vue'),
-        meta: { title: '服务评价', icon: 'Star', roles: ['counselor_teacher'] },
+        redirect: (to) => ({ path: '/teacher/personal', query: { ...to.query, tab: 'orders' } }),
+        meta: { hideInMenu: true, roles: ['counselor_teacher'] },
+      },
+      {
+        path: 'teacher/workbench',
+        name: 'TeacherWorkbench',
+        component: () => import('@/views/teacher/TeacherSmartWorkbench.vue'),
+        meta: { title: '智能工作台', icon: 'MagicStick', menuGroup: 'teacher', roles: ['counselor_teacher'] },
+      },
+      {
+        path: 'teacher/schedule',
+        name: 'TeacherSchedule',
+        component: () => import('@/views/teacher/TeacherSchedule.vue'),
+        meta: { title: '日程与规划', icon: 'Calendar', menuGroup: 'teacher', roles: ['counselor_teacher'] },
+      },
+      {
+        path: 'teacher/personal',
+        name: 'TeacherPersonal',
+        component: () => import('@/views/teacher/TeacherPersonalCenter.vue'),
+        meta: { title: '个人中心', icon: 'UserFilled', menuGroup: 'teacher', roles: ['counselor_teacher'] },
       },
       // 校园合作供应商专属 - 我的订单
       {
@@ -169,19 +212,63 @@ export const routes: RouteRecordRaw[] = [
         component: () => import('@/views/supplier/SupplierLogistics.vue'),
         meta: { title: '物流-仓储配送管理', icon: 'Van', roles: ['campus_supplier'] },
       },
-      // 用户管理 - 管理员
       {
         path: 'user',
-        name: 'UserManage',
-        component: () => import('@/views/user/UserManage.vue'),
-        meta: { title: '用户管理', icon: 'User', roles: ['system_admin'] },
+        redirect: '/system/users',
+        meta: { hideInMenu: true },
       },
-      // 审计日志 + 异常监督 - 管理员
+      {
+        path: 'system/users',
+        name: 'SystemUsers',
+        component: () => import('@/views/system/SystemUserIndex.vue'),
+        meta: { title: '用户管理', icon: 'User', menuGroup: 'system', roles: ['system_admin'] },
+      },
+      {
+        path: 'system/roles',
+        name: 'SystemRoles',
+        component: () => import('@/views/system/SystemRoleIndex.vue'),
+        meta: { title: '角色管理', icon: 'Key', menuGroup: 'system', roles: ['system_admin'] },
+      },
+      {
+        path: 'supplier',
+        name: 'SupplierList',
+        component: () => import('@/views/supplier/SupplierList.vue'),
+        meta: { title: '供应商管理', icon: 'OfficeBuilding', menuGroup: 'system', roles: ['system_admin'] },
+      },
+      {
+        path: 'system/operation-logs',
+        name: 'SystemOperationLogs',
+        component: () => import('@/views/system/logs/OperationLog.vue'),
+        meta: { title: '操作日志', icon: 'Notebook', menuGroup: 'system', roles: ['system_admin'] },
+      },
+      {
+        path: 'system/login-logs',
+        name: 'SystemLoginLogs',
+        component: () => import('@/views/system/logs/LoginLog.vue'),
+        meta: { title: '登录日志', icon: 'Unlock', menuGroup: 'system', roles: ['system_admin'] },
+      },
+      {
+        path: 'system/files',
+        name: 'SystemFileCenter',
+        component: () => import('@/views/system/file/FileCenter.vue'),
+        meta: { title: '文件中心', icon: 'FolderOpened', menuGroup: 'system', roles: ['system_admin'] },
+      },
+      {
+        path: 'system/positions',
+        name: 'SystemPositions',
+        component: () => import('@/views/system/position/PositionManage.vue'),
+        meta: { title: '岗位管理', icon: 'Briefcase', menuGroup: 'system', roles: ['system_admin'] },
+      },
+      {
+        path: 'system/departments',
+        name: 'SystemDepartments',
+        component: () => import('@/views/system/department/DepartmentManage.vue'),
+        meta: { title: '部门管理', icon: 'Share', menuGroup: 'system', roles: ['system_admin'] },
+      },
       {
         path: 'audit',
-        name: 'AuditLogs',
-        component: () => import('@/views/audit/AuditLogs.vue'),
-        meta: { title: '审计与异常监督', icon: 'Monitor', roles: ['system_admin'] },
+        redirect: '/system/operation-logs?tab=audit',
+        meta: { hideInMenu: true },
       },
       // 安全中心 - 点击后跳转独立界面，内含 IDS / 安全态势感知
       {

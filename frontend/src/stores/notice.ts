@@ -62,7 +62,7 @@ export const useNoticeStore = defineStore('notice', () => {
     if (p === '/stock/in') return warehouseStockInCount.value
     if (p === '/stock/out') return warehouseStockOutCount.value
     if (p === '/delivery') return deliveryToCreateCount.value
-    if (p === '/my-applications') return teacherReceiveCount.value
+    if (p === '/my-applications' || p === '/teacher/personal') return teacherReceiveCount.value
     return 0
   }
 

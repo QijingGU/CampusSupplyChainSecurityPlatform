@@ -8,6 +8,7 @@ import {
   nextTick,
 } from 'vue'
 import * as echarts from 'echarts'
+import { chartEnterAnimation, chartPieSectorEnter, chartBarGrowSeries } from '@/utils/chartAnimation'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, WarningFilled, Search } from '@element-plus/icons-vue'
 import { listQuarantineFiles, deleteQuarantineFile } from '@/api/upload'
@@ -276,6 +277,7 @@ function renderCharts() {
   if (trendRef.value) {
     if (!trendChart) trendChart = echarts.init(trendRef.value, 'dark')
     trendChart.setOption({
+      ...chartEnterAnimation,
       backgroundColor: 'transparent',
       tooltip: { trigger: 'axis' },
       grid: { left: 44, right: 16, top: 20, bottom: 28 },
@@ -296,6 +298,7 @@ function renderCharts() {
         {
           type: 'bar',
           data: a.daily_counts ?? [],
+          ...chartBarGrowSeries,
           itemStyle: {
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
               { offset: 0, color: 'rgba(34,211,238,0.85)' },
@@ -311,6 +314,7 @@ function renderCharts() {
     if (!extChart) extChart = echarts.init(extRef.value, 'dark')
     const pieData = (a.by_extension ?? []).map((x) => ({ name: x.ext, value: x.count }))
     extChart.setOption({
+      ...chartEnterAnimation,
       backgroundColor: 'transparent',
       tooltip: pieData.length ? { trigger: 'item', formatter: '{b}: {c} ({d}%)' } : { show: false },
       color: PIE_COLORS,
@@ -332,6 +336,7 @@ function renderCharts() {
       series: [
         {
           type: 'pie',
+          ...chartPieSectorEnter,
           radius: ['42%', '68%'],
           center: ['50%', '50%'],
           data: pieData,

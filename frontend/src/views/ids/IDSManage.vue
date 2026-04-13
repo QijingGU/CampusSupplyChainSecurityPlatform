@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
+import { chartEnterAnimation, chartPieSectorEnter, chartBarGrowSeries } from '@/utils/chartAnimation'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { listIDSEvents, getIDSStats, getIDSTrend, archiveIDSEvent, archiveIDSBatch } from '@/api/ids'
 import type { IDSEventItem } from '@/api/ids'
@@ -51,10 +52,12 @@ function renderPieChart() {
   if (!el || !stats.value?.by_type?.length) return
   if (!pieChartInstance) pieChartInstance = echarts.init(el)
   pieChartInstance.setOption({
+    ...chartEnterAnimation,
     tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
     color: PIE_COLORS,
     series: [{
       type: 'pie',
+      ...chartPieSectorEnter,
       radius: ['45%', '70%'],
       center: ['50%', '50%'],
       data: stats.value.by_type.map((t: { attack_type_label: string; count: number }) => ({
@@ -73,6 +76,7 @@ function renderTrendChart() {
   if (!trendChartInstance) trendChartInstance = echarts.init(el)
   const { dates, counts } = trendData.value
   trendChartInstance.setOption({
+    ...chartEnterAnimation,
     tooltip: { trigger: 'axis' },
     grid: { left: 48, right: 24, top: 24, bottom: 36 },
     xAxis: {
@@ -90,6 +94,7 @@ function renderTrendChart() {
     series: [{
       type: 'bar',
       data: counts ?? [],
+      ...chartBarGrowSeries,
       itemStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
           { offset: 0, color: '#165dff' },

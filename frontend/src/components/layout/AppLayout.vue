@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import type { RouteLocationNormalizedLoaded } from 'vue-router'
+import { useMediaQuery } from '@vueuse/core'
 import { ElNotification, ElMessageBox } from 'element-plus'
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
+import GlobalSearchDialog from './GlobalSearchDialog.vue'
+import SettingsDrawer from './SettingsDrawer.vue'
+import LockScreen from './LockScreen.vue'
 import { useUserStore } from '@/stores/user'
 import { useNoticeStore } from '@/stores/notice'
 import { getAndClearWarningToLogistics, clearWarningToLogistics } from '@/stores/demo'
@@ -12,9 +17,38 @@ import { listSupplierOrders } from '@/api/supplier'
 import { listMyPurchases } from '@/api/purchase'
 
 const route = useRoute()
+/** 与「一级子路由」同步 key：安全中心子页等只换内层，避免整页异步组件错层 */
+function layoutOutletKey(r: RouteLocationNormalizedLoaded) {
+  return r.matched[1]?.path ?? r.fullPath
+}
 const userStore = useUserStore()
 const noticeStore = useNoticeStore()
 const sidebarCollapsed = ref(false)
+const isMobileLayout = useMediaQuery('(max-width: 900px)')
+const mobileDrawerOpen = ref(false)
+
+function toggleSidebar() {
+  if (isMobileLayout.value) {
+    mobileDrawerOpen.value = !mobileDrawerOpen.value
+  } else {
+    sidebarCollapsed.value = !sidebarCollapsed.value
+  }
+}
+
+function closeMobileDrawer() {
+  mobileDrawerOpen.value = false
+}
+
+watch(isMobileLayout, (v) => {
+  if (!v) mobileDrawerOpen.value = false
+})
+
+watch(
+  () => route.fullPath,
+  () => {
+    if (isMobileLayout.value) mobileDrawerOpen.value = false
+  }
+)
 
 /** 数据大屏与侧栏、顶栏统一深色指挥台，避免浅色导航压在霓虹内容上 */
 const immersiveScreen = computed(() => {
@@ -174,7 +208,10 @@ async function markCurrentAsSeen() {
     markSeen('delivery')
     noticeStore.clearDeliveryToCreateCount()
   }
-  if (path.startsWith('/my-applications') && role.value === 'counselor_teacher') {
+  if (
+    (path.startsWith('/my-applications') || path.startsWith('/teacher/personal')) &&
+    role.value === 'counselor_teacher'
+  ) {
     markSeen('teacher')
     noticeStore.clearTeacherReceiveCount()
   }
@@ -256,23 +293,49 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-layout" :class="{ 'app-layout--immersive': immersiveScreen }">
-    <AppSidebar v-model:collapsed="sidebarCollapsed" :immersive="immersiveScreen" />
-    <div class="main-wrapper" :class="{ 'sidebar-collapsed': sidebarCollapsed, 'main-wrapper--immersive': immersiveScreen }">
+  <div class="app-layout" :class="{ 'app-layout--immersive': immersiveScreen, 'app-layout--mobile': isMobileLayout }">
+    <Transition name="fade">
+      <div
+        v-if="isMobileLayout && mobileDrawerOpen"
+        class="sidebar-backdrop"
+        aria-hidden="true"
+        @click="closeMobileDrawer"
+      />
+    </Transition>
+    <AppSidebar
+      v-model:collapsed="sidebarCollapsed"
+      :immersive="immersiveScreen"
+      :mobile="isMobileLayout"
+      :mobile-open="mobileDrawerOpen"
+      @close-drawer="closeMobileDrawer"
+    />
+    <div
+      class="main-wrapper"
+      :class="{
+        'sidebar-collapsed': sidebarCollapsed && !isMobileLayout,
+        'main-wrapper--immersive': immersiveScreen,
+        'main-wrapper--mobile': isMobileLayout,
+      }"
+    >
       <AppHeader
         :title="pageTitle"
-        :collapsed="sidebarCollapsed"
+        :sidebar-expanded="isMobileLayout ? mobileDrawerOpen : !sidebarCollapsed"
         :immersive="immersiveScreen"
-        @toggle="sidebarCollapsed = !sidebarCollapsed"
+        @toggle="toggleSidebar"
       />
       <main class="main-content" :class="{ 'main-content--immersive': immersiveScreen }">
-        <Transition name="page" mode="out-in">
-          <router-view v-slot="{ Component }">
-            <component :is="Component" />
+        <div class="router-outlet">
+          <router-view v-slot="{ Component, route: r }">
+            <!-- 不用带位移的 page 过渡：离开节点仍占位时，新页面会被排到视口下方，出现「URL/标题已变但内容仍是上一页」 -->
+            <component v-if="Component" :is="Component" :key="layoutOutletKey(r)" />
           </router-view>
-        </Transition>
+        </div>
       </main>
     </div>
+
+    <GlobalSearchDialog />
+    <SettingsDrawer />
+    <LockScreen />
   </div>
 </template>
 
@@ -283,10 +346,27 @@ onBeforeUnmount(() => {
   background: var(--bg-base);
 }
 
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.28s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
 .main-wrapper {
   flex: 1;
   margin-left: 220px;
-  transition: margin-left var(--transition-base);
+  transition: margin-left 0.32s cubic-bezier(0.25, 0.1, 0.25, 1);
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -294,12 +374,21 @@ onBeforeUnmount(() => {
   &.sidebar-collapsed {
     margin-left: 68px;
   }
+
+  &.main-wrapper--mobile {
+    margin-left: 0;
+  }
 }
 
 .main-content {
   flex: 1;
   padding: 24px;
   overflow-y: auto;
+  min-height: 0;
+}
+
+.router-outlet {
+  min-height: 0;
 }
 
 .app-layout--immersive {
@@ -317,16 +406,4 @@ onBeforeUnmount(() => {
   background: transparent;
 }
 
-.page-enter-active,
-.page-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-.page-enter-from {
-  opacity: 0;
-  transform: translateY(12px);
-}
-.page-leave-to {
-  opacity: 0;
-  transform: translateY(-8px);
-}
 </style>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+
+const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 import { getSupplyChainOverviewScreen } from '@/api/dashboard'
 import type { SupplyChainOverviewScreenData } from '@/api/dashboard'
 
@@ -109,13 +111,13 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="overview-screen" v-loading="loading">
+  <div class="overview-screen" :class="{ 'is-embedded': props.embedded }" v-loading="loading">
     <div class="bg-layer">
       <div class="bg-grid" />
       <div class="bg-halo" />
     </div>
 
-    <header class="header">
+    <header v-if="!props.embedded" class="header">
       <div class="title-wrap">
         <h1>{{ TXT.title }}</h1>
         <p>{{ TXT.subtitle }}</p>
@@ -241,6 +243,10 @@ onUnmounted(() => {
 .overview-screen {
   min-height: calc(100vh - 64px);
   padding: 20px 24px 28px;
+  &.is-embedded {
+    min-height: 520px;
+    padding: 12px 0 20px;
+  }
   color: var(--screen-text);
   position: relative;
   background: radial-gradient(

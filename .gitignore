@@ -23,7 +23,12 @@ __pycache__/
 backend/.env
 frontend/.env
 frontend/.env.local
+frontend/.env.development.local
+frontend/.env.production.local
+cyberguard/.env.local
+cyberguard/.env
 !frontend/.env.production
+!frontend/.env.development
 !backend/.env.example
 !.env.example
 

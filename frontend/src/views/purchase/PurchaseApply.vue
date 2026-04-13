@@ -142,7 +142,10 @@ async function doSubmit(isDraft: number) {
   } catch { /* handled by interceptor */ } finally { loading.value = false }
 }
 
-function toProgress() { successVisible.value = false; router.push('/my-applications') }
+function toProgress() {
+  successVisible.value = false
+  router.push('/teacher/personal?tab=orders')
+}
 function resetForm() {
   form.goods_id = null; form.quantity = 1; form.apply_reason = ''
   form.destination = ''; form.receiver_name = ''; form.material_type = '教学'
@@ -168,7 +171,7 @@ function getStatusType(s: string) {
       </div>
       <div class="header-actions">
         <el-button @click="openHistory">历史记录</el-button>
-        <el-button @click="router.push('/my-applications')">进度查询</el-button>
+        <el-button @click="router.push('/teacher/personal?tab=orders')">进度查询</el-button>
         <el-button @click="router.back()">返回</el-button>
       </div>
     </div>

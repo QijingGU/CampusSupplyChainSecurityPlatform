@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { routes } from '@/router/routes'
+import { isNavigationFailure, NavigationFailureType, useRoute, useRouter } from 'vue-router'
+import type { RouteRecordRaw } from 'vue-router'
+import { routes, type RouteMetaRole } from '@/router/routes'
 import { useUserStore } from '@/stores/user'
 import { useNoticeStore } from '@/stores/notice'
 import type { RoleType } from '@/types/role'
-import type { RouteMetaRole } from '@/router/routes'
 import {
   Odometer,
   Box,
@@ -21,21 +21,61 @@ import {
   User,
   DArrowLeft,
   DArrowRight,
+  Close,
   Document,
   List,
   Monitor,
   Location,
   Lock,
   Star,
+  Sunny,
+  Moon,
+  Setting,
+  Key,
+  DataLine,
+  Notebook,
+  Unlock,
+  FolderOpened,
+  Briefcase,
+  Share,
+  MagicStick,
+  Calendar,
+  UserFilled,
 } from '@element-plus/icons-vue'
+import { useUiSettingsStore } from '@/stores/uiSettings'
+import { openSettingsBus } from '@/utils/layoutBus'
+import { themeAnimation } from '@/utils/themeAnimation'
+import UserMenuPopover from './UserMenuPopover.vue'
 
-const props = defineProps<{ collapsed: boolean; immersive?: boolean }>()
-defineEmits<{ (e: 'update:collapsed', v: boolean): void }>()
+const props = defineProps<{
+  collapsed: boolean
+  immersive?: boolean
+  mobile?: boolean
+  mobileOpen?: boolean
+}>()
+const emit = defineEmits<{
+  (e: 'update:collapsed', v: boolean): void
+  (e: 'close-drawer'): void
+}>()
+
+function onFooterClick() {
+  if (props.mobile) emit('close-drawer')
+  else emit('update:collapsed', !props.collapsed)
+}
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const noticeStore = useNoticeStore()
+const uiSettings = useUiSettingsStore()
+
+function openSettings() {
+  openSettingsBus.emit()
+}
+
+function onThemeClick(e: MouseEvent) {
+  themeAnimation(e)
+}
 
 const iconMap: Record<string, object> = {
   Odometer,
@@ -56,6 +96,16 @@ const iconMap: Record<string, object> = {
   Monitor,
   Location,
   Star,
+  Key,
+  DataLine,
+  Notebook,
+  Unlock,
+  FolderOpened,
+  Briefcase,
+  Share,
+  MagicStick,
+  Calendar,
+  UserFilled,
 }
 
 const userRole = computed(() => userStore.userInfo?.role as RoleType | undefined)
@@ -71,23 +121,63 @@ function canAccess(item: (typeof menuItems.value)[0]): boolean {
   return userRole.value ? roles.includes(userRole.value) : false
 }
 
+const teacherItems = computed(() =>
+  menuItems.value.filter((r) => r.meta?.menuGroup === 'teacher' && canAccess(r))
+)
+const dashboardItems = computed(() =>
+  menuItems.value.filter((r) => r.meta?.menuGroup === 'dashboard' && canAccess(r))
+)
 const stockItems = computed(() =>
   menuItems.value.filter((r) => r.meta?.menuGroup === 'stock' && canAccess(r))
 )
 const securityItems = computed(() =>
   menuItems.value.filter((r) => r.meta?.menuGroup === 'security' && canAccess(r))
 )
+const systemItems = computed(() =>
+  menuItems.value.filter((r) => r.meta?.menuGroup === 'system' && canAccess(r))
+)
+function hideFromTeacherMenu(item: (typeof menuItems.value)[0]): boolean {
+  if (userRole.value !== 'counselor_teacher') return false
+  const p = normalizePath(item.path as string)
+  if (p === '/ai/chat') return true
+  return false
+}
+
 const otherItems = computed(() =>
-  menuItems.value.filter((r) => r.meta?.menuGroup !== 'stock' && r.meta?.menuGroup !== 'security' && canAccess(r))
+  menuItems.value.filter(
+    (r) =>
+      r.meta?.menuGroup !== 'dashboard' &&
+      r.meta?.menuGroup !== 'stock' &&
+      r.meta?.menuGroup !== 'security' &&
+      r.meta?.menuGroup !== 'system' &&
+      r.meta?.menuGroup !== 'teacher' &&
+      canAccess(r) &&
+      !hideFromTeacherMenu(r)
+  )
 )
 
 function isActive(path: string) {
   const normalizedPath = normalizePath(path)
+  if (normalizedPath === '/dashboard') {
+    return route.path === '/dashboard' || route.path === '/dashboard/'
+  }
+  if (normalizedPath === '/dashboard/analysis') {
+    return route.path === '/dashboard/analysis' || route.path.startsWith('/dashboard/analysis/')
+  }
   return route.path === normalizedPath || route.path.startsWith(normalizedPath + '/')
 }
 
-function navigate(path: string) {
-  router.push(normalizePath(path))
+function navigate(target: RouteRecordRaw | string) {
+  const loc =
+    typeof target === 'string'
+      ? normalizePath(target)
+      : target.name != null
+        ? { name: target.name }
+        : normalizePath(target.path as string)
+  void router.push(loc).catch((failure) => {
+    if (isNavigationFailure(failure, NavigationFailureType.duplicated)) return
+    throw failure
+  })
 }
 
 function normalizePath(path: string) {
@@ -105,7 +195,15 @@ function getBadgeCount(path: string) {
 </script>
 
 <template>
-  <aside class="sidebar" :class="{ collapsed: collapsed, immersive: immersive }">
+  <aside
+    class="sidebar"
+    :class="{
+      collapsed: collapsed && !mobile,
+      immersive: immersive,
+      'sidebar--mobile': mobile,
+      'sidebar--mobile-open': mobile && mobileOpen,
+    }"
+  >
     <div class="logo">
       <div class="logo-icon">
         <span class="icon-text">链</span>
@@ -114,20 +212,88 @@ function getBadgeCount(path: string) {
     </div>
 
     <nav class="nav">
-      <template v-for="item in otherItems" :key="item.path">
+      <div v-if="teacherItems.length" class="nav-group nav-group--teacher">
+        <div class="nav-group-title" :class="{ collapsed }">
+          <el-icon><MagicStick /></el-icon>
+          <span v-show="!collapsed">教师工作台</span>
+        </div>
         <div
-          class="nav-item"
+          v-for="item in teacherItems"
+          :key="item.path"
+          class="nav-item nested"
           :class="{ active: isActive(item.path as string) }"
-          @click="navigate(item.path as string)"
+          @click="navigate(item)"
         >
           <el-badge
             class="nav-icon-badge"
             :is-dot="collapsed && getBadgeCount(item.path as string) > 0"
             :hidden="!(collapsed && getBadgeCount(item.path as string) > 0)"
           >
-            <el-icon class="nav-icon">
-              <component :is="getIcon(item.meta?.icon as string)" />
-            </el-icon>
+            <span class="nav-icon-wrap">
+              <el-icon class="nav-icon">
+                <component :is="getIcon(item.meta?.icon as string)" />
+              </el-icon>
+            </span>
+          </el-badge>
+          <el-badge
+            :value="getBadgeCount(item.path as string)"
+            :hidden="collapsed || getBadgeCount(item.path as string) <= 0"
+            type="danger"
+          >
+            <span v-show="!collapsed" class="nav-label">{{ item.meta?.title }}</span>
+          </el-badge>
+        </div>
+      </div>
+
+      <div v-if="dashboardItems.length" class="nav-group nav-group--dashboard">
+        <div class="nav-group-title" :class="{ collapsed }">
+          <el-icon><Odometer /></el-icon>
+          <span v-show="!collapsed">仪表盘</span>
+        </div>
+        <div
+          v-for="item in dashboardItems"
+          :key="item.path"
+          class="nav-item nested"
+          :class="{ active: isActive(item.path as string) }"
+          @click="navigate(item)"
+        >
+          <el-badge
+            class="nav-icon-badge"
+            :is-dot="collapsed && getBadgeCount(item.path as string) > 0"
+            :hidden="!(collapsed && getBadgeCount(item.path as string) > 0)"
+          >
+            <span class="nav-icon-wrap">
+              <el-icon class="nav-icon">
+                <component :is="getIcon(item.meta?.icon as string)" />
+              </el-icon>
+            </span>
+          </el-badge>
+          <el-badge
+            :value="getBadgeCount(item.path as string)"
+            :hidden="collapsed || getBadgeCount(item.path as string) <= 0"
+            type="danger"
+          >
+            <span v-show="!collapsed" class="nav-label">{{ item.meta?.title }}</span>
+          </el-badge>
+        </div>
+      </div>
+
+      <template v-for="item in otherItems" :key="item.path">
+        <div
+          class="nav-item"
+          :class="{ active: isActive(item.path as string) }"
+          @click="navigate(item)"
+        >
+          <el-badge
+            class="nav-icon-badge"
+            :is-dot="collapsed && getBadgeCount(item.path as string) > 0"
+            :hidden="!(collapsed && getBadgeCount(item.path as string) > 0)"
+          >
+            <span class="nav-icon-wrap">
+              <el-icon class="nav-icon">
+                <component :is="getIcon(item.meta?.icon as string)" />
+              </el-icon>
+            </span>
           </el-badge>
           <el-badge
             :value="getBadgeCount(item.path as string)"
@@ -139,6 +305,39 @@ function getBadgeCount(path: string) {
         </div>
       </template>
 
+      <div v-if="systemItems.length" class="nav-group">
+        <div class="nav-group-title" :class="{ collapsed }">
+          <el-icon><Setting /></el-icon>
+          <span v-show="!collapsed">系统管理</span>
+        </div>
+        <div
+          v-for="item in systemItems"
+          :key="item.path"
+          class="nav-item nested"
+          :class="{ active: isActive(item.path as string) }"
+          @click="navigate(item)"
+        >
+          <el-badge
+            class="nav-icon-badge"
+            :is-dot="collapsed && getBadgeCount(item.path as string) > 0"
+            :hidden="!(collapsed && getBadgeCount(item.path as string) > 0)"
+          >
+            <span class="nav-icon-wrap">
+              <el-icon class="nav-icon">
+                <component :is="getIcon(item.meta?.icon as string)" />
+              </el-icon>
+            </span>
+          </el-badge>
+          <el-badge
+            :value="getBadgeCount(item.path as string)"
+            :hidden="collapsed || getBadgeCount(item.path as string) <= 0"
+            type="danger"
+          >
+            <span v-show="!collapsed" class="nav-label">{{ item.meta?.title }}</span>
+          </el-badge>
+        </div>
+      </div>
+
       <div v-if="stockItems.length" class="nav-group">
         <div class="nav-group-title" :class="{ collapsed }">
           <el-icon><Box /></el-icon>
@@ -149,16 +348,18 @@ function getBadgeCount(path: string) {
           :key="item.path"
           class="nav-item nested"
           :class="{ active: isActive(item.path as string) }"
-          @click="navigate(item.path as string)"
+          @click="navigate(item)"
         >
           <el-badge
             class="nav-icon-badge"
             :is-dot="collapsed && getBadgeCount(item.path as string) > 0"
             :hidden="!(collapsed && getBadgeCount(item.path as string) > 0)"
           >
-            <el-icon class="nav-icon">
-              <component :is="getIcon(item.meta?.icon as string)" />
-            </el-icon>
+            <span class="nav-icon-wrap">
+              <el-icon class="nav-icon">
+                <component :is="getIcon(item.meta?.icon as string)" />
+              </el-icon>
+            </span>
           </el-badge>
           <el-badge
             :value="getBadgeCount(item.path as string)"
@@ -175,14 +376,46 @@ function getBadgeCount(path: string) {
         :class="{ active: route.path.startsWith('/security') }"
         @click="navigate('/security')"
       >
-        <el-icon class="nav-icon"><Lock /></el-icon>
+        <span class="nav-icon-wrap">
+          <el-icon class="nav-icon"><Lock /></el-icon>
+        </span>
         <span v-show="!collapsed" class="nav-label">安全中心</span>
       </div>
     </nav>
 
+    <div class="sidebar-dock">
+      <el-tooltip content="明暗主题" placement="right" :disabled="!collapsed && !mobile">
+        <div
+          class="dock-btn"
+          :class="{ immersive }"
+          @click="onThemeClick($event)"
+        >
+          <transition name="theme-ico" mode="out-in">
+            <el-icon v-if="uiSettings.isDark" key="sun" :size="20"><Sunny /></el-icon>
+            <el-icon v-else key="moon" :size="20"><Moon /></el-icon>
+          </transition>
+        </div>
+      </el-tooltip>
+      <el-tooltip content="设置" placement="right" :disabled="!collapsed && !mobile">
+        <div class="dock-btn" :class="{ immersive }" @click="openSettings">
+          <el-icon :size="20"><Setting /></el-icon>
+        </div>
+      </el-tooltip>
+      <UserMenuPopover
+        class="dock-user-wrap"
+        :immersive="immersive"
+        trigger="click"
+        compact
+      />
+    </div>
+
     <div class="sidebar-footer">
-      <div class="collapse-btn" @click="$emit('update:collapsed', !collapsed)">
-        <el-icon><DArrowLeft v-if="!collapsed" /><DArrowRight v-else /></el-icon>
+      <div class="collapse-btn" :title="mobile ? '收起菜单' : collapsed ? '展开侧栏' : '收起侧栏'" @click="onFooterClick">
+        <transition name="collapse-ico" mode="out-in">
+          <el-icon v-if="mobile" key="m-close" :size="20"><Close /></el-icon>
+          <el-icon v-else-if="!collapsed" key="expand" :size="20"><DArrowLeft /></el-icon>
+          <el-icon v-else key="collapse" :size="20"><DArrowRight /></el-icon>
+        </transition>
       </div>
     </div>
   </aside>
@@ -201,7 +434,23 @@ function getBadgeCount(path: string) {
   display: flex;
   flex-direction: column;
   z-index: 100;
-  transition: width var(--transition-base);
+  transition:
+    width 0.32s cubic-bezier(0.25, 0.1, 0.25, 1),
+    transform 0.32s cubic-bezier(0.25, 0.1, 0.25, 1),
+    box-shadow 0.32s ease;
+  will-change: width, transform;
+
+  &.sidebar--mobile {
+    width: min(280px, 86vw);
+    transform: translate3d(-104%, 0, 0);
+    box-shadow: none;
+    border-right: 1px solid var(--border-subtle);
+
+    &.sidebar--mobile-open {
+      transform: translate3d(0, 0, 0);
+      box-shadow: 8px 0 40px rgba(15, 23, 42, 0.18);
+    }
+  }
 
   &.immersive {
     background: var(--screen-chrome-bg);
@@ -219,20 +468,34 @@ function getBadgeCount(path: string) {
     .nav-item {
       color: rgba(226, 232, 240, 0.72);
 
+      &::before {
+        background: var(--screen-accent-strong);
+        pointer-events: none;
+      }
+
       &:hover {
         background: rgba(99, 102, 241, 0.18);
         color: var(--screen-accent-strong);
       }
 
       &.active {
-        background: rgba(99, 102, 241, 0.24);
-        color: var(--screen-accent-strong);
-        box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.2);
+        background: rgba(129, 140, 248, 0.14);
+        color: #e0e7ff;
+        box-shadow: none;
+      }
+
+      &.active .nav-icon {
+        transform: scale(1.02);
+        color: #c7d2fe;
       }
     }
 
     .nav-group-title {
       color: rgba(148, 163, 184, 0.65);
+    }
+
+    .sidebar-dock {
+      border-top-color: var(--screen-chrome-border);
     }
 
     .sidebar-footer {
@@ -259,8 +522,10 @@ function getBadgeCount(path: string) {
     .nav-item .nav-label,
     .logo-text {
       opacity: 0;
-      width: 0;
+      max-width: 0;
+      margin: 0;
       overflow: hidden;
+      pointer-events: none;
     }
   }
 }
@@ -302,7 +567,10 @@ function getBadgeCount(path: string) {
   font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
-  transition: opacity var(--transition-fast);
+  max-width: 200px;
+  transition:
+    opacity 0.26s cubic-bezier(0.25, 0.1, 0.25, 1),
+    max-width 0.32s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 .nav {
@@ -312,6 +580,7 @@ function getBadgeCount(path: string) {
 }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -319,23 +588,74 @@ function getBadgeCount(path: string) {
   border-radius: 12px;
   cursor: pointer;
   color: var(--text-secondary);
-  transition: all var(--transition-fast);
+  transition:
+    background 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    color 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.28s ease,
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
   margin-bottom: 4px;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    width: 3px;
+    height: 0;
+    border-radius: 2px;
+    background: var(--primary);
+    transform: translateY(-50%) scaleY(0);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      height 0.32s cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 0.24s ease,
+      transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  &.active::before {
+    height: 26px;
+    opacity: 1;
+    transform: translateY(-50%) scaleY(1);
+  }
 
   &:hover {
     background: var(--primary-muted);
     color: var(--primary);
+    transform: translateX(3px);
   }
 
   &.active {
-    background: var(--primary-muted);
-    color: var(--primary);
+    /* 低饱和底 + 深色字，避免与侧栏紫条/图标融在一起 */
+    background: rgba(79, 70, 229, 0.09);
+    color: #3730a3;
     font-weight: 600;
+    box-shadow: none;
   }
 
   &.nested {
     padding-left: 44px;
+    &::before {
+      left: 22px;
+    }
   }
+}
+
+.nav-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nav-item .nav-icon {
+  transition:
+    transform 0.34s cubic-bezier(0.34, 1.25, 0.64, 1),
+    color 0.28s ease;
+}
+
+.nav-item.active .nav-icon {
+  transform: scale(1.02);
+  color: #4338ca;
 }
 
 .nav-icon {
@@ -349,7 +669,10 @@ function getBadgeCount(path: string) {
 
 .nav-label {
   white-space: nowrap;
-  transition: opacity var(--transition-fast);
+  max-width: 200px;
+  transition:
+    opacity 0.26s cubic-bezier(0.25, 0.1, 0.25, 1),
+    max-width 0.32s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 .nav-group {
@@ -371,8 +694,51 @@ function getBadgeCount(path: string) {
   }
 }
 
+.sidebar-dock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 12px 10px;
+  border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.dock-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition:
+    background 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease;
+  &:hover {
+    background: var(--primary-muted);
+    color: var(--primary);
+    transform: scale(1.05);
+  }
+  &.immersive {
+    color: rgba(148, 163, 184, 0.85);
+    &:hover {
+      background: rgba(99, 102, 241, 0.18);
+      color: var(--screen-accent-strong);
+    }
+  }
+}
+
+.dock-user-wrap {
+  display: flex;
+  align-items: center;
+}
+
 .sidebar-footer {
-  padding: 16px;
+  padding: 12px 16px 16px;
   border-top: 1px solid var(--border-subtle);
 }
 
@@ -391,5 +757,36 @@ function getBadgeCount(path: string) {
     background: var(--bg-hover);
     color: var(--primary);
   }
+}
+
+.theme-ico-enter-active,
+.theme-ico-leave-active,
+.collapse-ico-enter-active,
+.collapse-ico-leave-active {
+  transition:
+    opacity 0.2s ease,
+    transform 0.28s cubic-bezier(0.34, 1.25, 0.64, 1);
+}
+
+.theme-ico-enter-from,
+.collapse-ico-enter-from {
+  opacity: 0;
+  transform: rotate(-85deg) scale(0.45);
+}
+
+.theme-ico-leave-to,
+.collapse-ico-leave-to {
+  opacity: 0;
+  transform: rotate(85deg) scale(0.45);
+}
+
+/* 暗色主题：激活项用浅色字，避免紫底吞没图标 */
+:global(html.dark) .sidebar .nav-item.active {
+  background: rgba(129, 140, 248, 0.14);
+  color: #e0e7ff;
+  box-shadow: none;
+}
+:global(html.dark) .sidebar .nav-item.active .nav-icon {
+  color: #c7d2fe;
 }
 </style>

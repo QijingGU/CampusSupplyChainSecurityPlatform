@@ -245,7 +245,7 @@ def get_dashboard(
         }
         return {
             "stats": [
-                {"title": "用户总数", "value": user_count, "trend": "up", "trendValue": "", "icon": "User", "path": "/user"},
+                {"title": "用户总数", "value": user_count, "trend": "up", "trendValue": "", "icon": "User", "path": "/system/users"},
                 {"title": "供应商总数", "value": supplier_count, "trend": "up", "trendValue": "", "icon": "OfficeBuilding", "path": "/supplier"},
                 {"title": "审计日志", "value": audit_count, "trend": "up", "trendValue": "", "icon": "Document", "path": "/audit"},
                 {"title": "敏感操作", "value": sensitive_count, "trend": "down", "trendValue": "待审查", "icon": "Warning", "path": "/audit"},

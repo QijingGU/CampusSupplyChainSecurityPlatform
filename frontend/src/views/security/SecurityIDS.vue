@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
+import { chartEnterAnimation, chartPieSectorEnter, chartBarGrowSeries } from '@/utils/chartAnimation'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { DeleteFilled } from '@element-plus/icons-vue'
 import html2canvas from 'html2canvas'
@@ -118,6 +119,7 @@ function renderPieChart() {
   if (!el || !stats.value?.by_type?.length) return
   if (!pieChartInstance) pieChartInstance = echarts.init(el, 'dark')
   pieChartInstance.setOption({
+    ...chartEnterAnimation,
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'item',
@@ -145,6 +147,7 @@ function renderPieChart() {
     },
     series: [{
       type: 'pie',
+      ...chartPieSectorEnter,
       radius: ['40%', '62%'],
       center: ['30%', '50%'],
       data: stats.value.by_type.map((t: { attack_type_label: string; count: number }) => ({
@@ -164,6 +167,7 @@ function renderTrendChart() {
   if (!trendChartInstance) trendChartInstance = echarts.init(el, 'dark')
   const { dates, counts } = trendData.value
   trendChartInstance.setOption({
+    ...chartEnterAnimation,
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis',
@@ -189,6 +193,7 @@ function renderTrendChart() {
     series: [{
       type: 'bar',
       data: counts ?? [],
+      ...chartBarGrowSeries,
       itemStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
           { offset: 0, color: 'rgba(59,130,246,0.8)' },

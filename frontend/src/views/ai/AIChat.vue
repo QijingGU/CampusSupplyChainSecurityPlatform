@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch, onMounted } from 'vue'
+import { workbenchChatPrefill } from '@/utils/teacherWorkbenchBus'
 import { ChatDotRound, Promotion, User, CircleCheck, DocumentCopy, WarningFilled, Cpu } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
@@ -17,6 +18,8 @@ const DEFAULT_REASONING_STEPS: ReactStep[] = [
   { step: 3, text: '调用工具：check_inventory() 核对库存可用性' },
   { step: 4, text: '生成采购清单，等待您确认' },
 ]
+
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 
 const userStore = useUserStore()
 const userRole = computed(() => userStore.userInfo?.role as RoleType)
@@ -62,6 +65,19 @@ const reasoningPhase = ref<{
 if (messages.value.length === 0) {
   messages.value = [{ role: 'assistant', content: initialMessage.value }]
 }
+
+function applyWorkbenchPrefill(v: string) {
+  if (!v) return
+  input.value = v
+  workbenchChatPrefill.value = ''
+  nextTick(() => scrollRef.value?.scrollTo?.({ top: 9999 }))
+}
+
+watch(workbenchChatPrefill, (v) => applyWorkbenchPrefill(v || ''), { flush: 'post' })
+
+onMounted(() => {
+  if (workbenchChatPrefill.value) applyWorkbenchPrefill(workbenchChatPrefill.value)
+})
 
 const demoHint = '周三有比赛，帮我做保障计划 / 40人班会要茶歇 / 现在什么短缺？'
 
@@ -273,7 +289,7 @@ async function handleAction(action: ChatAction) {
 </script>
 
 <template>
-  <div class="ai-chat-page">
+  <div class="ai-chat-page" :class="{ 'ai-chat-page--embedded': embedded }">
     <div class="chat-container">
       <div ref="scrollRef" class="messages">
         <template v-for="(msg, i) in messages" :key="i">
@@ -371,7 +387,7 @@ async function handleAction(action: ChatAction) {
         <el-input
           v-model="input"
           type="textarea"
-          :rows="2"
+          :rows="embedded ? 3 : 2"
           :placeholder="userRole === 'warehouse_procurement' ? demoHint : '输入问题...'"
           resize="none"
           @keydown.enter.exact.prevent="send"
@@ -422,6 +438,12 @@ async function handleAction(action: ChatAction) {
   display: flex;
   flex-direction: column;
   padding: 0;
+}
+
+.ai-chat-page--embedded {
+  height: 100%;
+  min-height: 280px;
+  max-height: none;
 }
 
 .chat-container {

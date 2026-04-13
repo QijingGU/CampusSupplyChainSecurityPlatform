@@ -60,7 +60,17 @@ def list_users(db: Session = Depends(get_db), current_user: User = Depends(get_c
     if not has_role(current_user, "system_admin"):
         return []
     users = db.query(User).all()
-    return [{"id": u.id, "username": u.username, "real_name": u.real_name or u.username, "role": normalize_role(u.role)} for u in users]
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "real_name": u.real_name or u.username,
+            "role": normalize_role(u.role),
+            "department": (u.department or "").strip(),
+            "phone": (u.phone or "").strip(),
+        }
+        for u in users
+    ]
 
 
 @router.post("/manage")
@@ -83,4 +93,11 @@ def create_user(data: UserCreate, db: Session = Depends(get_db), current_user: U
     db.add(user)
     db.commit()
     db.refresh(user)
-    return {"id": user.id, "username": user.username, "real_name": user.real_name, "role": normalize_role(user.role)}
+    return {
+        "id": user.id,
+        "username": user.username,
+        "real_name": user.real_name,
+        "role": normalize_role(user.role),
+        "department": (user.department or "").strip(),
+        "phone": (user.phone or "").strip(),
+    }

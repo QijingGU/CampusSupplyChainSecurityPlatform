@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
+import { chartEnterAnimation } from '@/utils/chartAnimation'
 import { getLogisticsScreen } from '@/api/dashboard'
 import type { LogisticsScreenData } from '@/api/dashboard'
 
@@ -55,6 +56,7 @@ function renderChart() {
   const { labels, purchase } = data.value.chart
   const accent = cssVar('--screen-accent', '#818cf8')
   chartInstance.setOption({
+    ...chartEnterAnimation,
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis',

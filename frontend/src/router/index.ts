@@ -12,9 +12,9 @@ const router = createRouter({
 function getDefaultRedirect(role: RoleType): string {
   switch (role) {
     case 'system_admin':
-      return '/user'
+      return '/dashboard'
     case 'counselor_teacher':
-      return '/ai/chat'
+      return '/teacher/workbench'
     case 'campus_supplier':
       return '/supplier/orders'
     default:
@@ -38,6 +38,12 @@ router.beforeEach((to, _from, next) => {
 
   const routeRoles = (to.meta as RouteMetaRole)?.roles as RoleType[] | undefined
   const userRole = userStore.userInfo?.role as RoleType | undefined
+
+  if (routeRoles?.length && !userRole) {
+    userStore.logout()
+    next({ name: 'Login', query: { redirect: to.fullPath } })
+    return
+  }
 
   if (routeRoles?.length && userRole && !routeRoles.includes(userRole)) {
     next(getDefaultRedirect(userRole))

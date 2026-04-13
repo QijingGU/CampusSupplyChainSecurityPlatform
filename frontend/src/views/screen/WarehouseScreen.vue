@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
+import { chartEnterAnimation, chartBarGrowSeries } from '@/utils/chartAnimation'
 import { getWarehouseScreen } from '@/api/dashboard'
 import { createStockIn, createStockOut } from '@/api/stock'
 import { createDelivery } from '@/api/delivery'
@@ -40,6 +41,7 @@ function renderChart() {
   const accent = cssVar('--screen-accent', '#818cf8')
   const outColor = cssVar('--success', '#0d9488')
   chartInstance.setOption({
+    ...chartEnterAnimation,
     backgroundColor: 'transparent',
     tooltip: {
       trigger: 'axis',
@@ -62,8 +64,8 @@ function renderChart() {
       axisLabel: { color: 'rgba(148, 163, 184, 0.85)', fontSize: 11 },
     },
     series: [
-      { name: '入库', type: 'bar', data: inVals, itemStyle: { color: accent } },
-      { name: '出库', type: 'bar', data: outVals, itemStyle: { color: outColor } },
+      { name: '入库', type: 'bar', data: inVals, ...chartBarGrowSeries, itemStyle: { color: accent } },
+      { name: '出库', type: 'bar', data: outVals, ...chartBarGrowSeries, itemStyle: { color: outColor } },
     ],
   })
 }

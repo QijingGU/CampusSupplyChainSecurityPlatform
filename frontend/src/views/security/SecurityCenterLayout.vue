@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Lock, Monitor, ArrowLeft, FolderOpened } from '@element-plus/icons-vue'
 
@@ -13,14 +13,13 @@ const navItems = [
   { path: '/security/sandbox', label: '安全沙箱', icon: FolderOpened },
 ]
 
-// 安全中心仅管理员可访问，返回时跳转到管理员默认入口（用户管理）
+// 安全中心仅管理员可访问，返回工作台
 function goBack() {
-  router.push('/user')
+  router.push('/dashboard')
 }
 
 function goTo(path: string) {
   if (route.path === path) return
-  loading.value = true
   router.push(path)
 }
 
@@ -29,8 +28,18 @@ const isActive = (path: string) => route.path === path || route.path.startsWith(
 let loadTimer: ReturnType<typeof setTimeout> | null = null
 onMounted(() => {
   document.body.classList.add('security-center-active')
-  loadTimer = setTimeout(() => { loading.value = false }, 280)
+  loadTimer = setTimeout(() => {
+    loading.value = false
+    loadTimer = null
+  }, 280)
 })
+/** 子路由切换不再使用全屏 loading；若曾误置 true，在路由就绪后关闭 */
+watch(
+  () => route.fullPath,
+  () => {
+    if (loading.value) loading.value = false
+  }
+)
 onBeforeUnmount(() => {
   document.body.classList.remove('security-center-active')
   if (loadTimer) clearTimeout(loadTimer)
@@ -68,9 +77,9 @@ onBeforeUnmount(() => {
       </nav>
     </aside>
     <main class="security-main">
-      <router-view v-slot="{ Component }">
+      <router-view v-slot="{ Component, route: childRoute }">
         <transition name="fade" mode="out-in">
-          <component :is="Component" />
+          <component :is="Component" :key="childRoute.fullPath" />
         </transition>
       </router-view>
     </main>
